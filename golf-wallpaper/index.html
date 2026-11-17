@@ -90,13 +90,21 @@
   const bgCtx = bgCanvas.getContext('2d');
   let view = { scale: 1, ox: 0, oy: 0, k: 1 };
 
+  // Two golfers take turns (farthest from the cup plays, like real golf) and compete: fewest strokes wins each hole.
+  // noiseA / noiseP = how much they miss on aim / power (BLUE is a little steadier than RED).
+  const players = [
+    { name: 'BLUE', color: '#60a5fa', rim: '#1d4ed8', noiseA: 0.04, noiseP: 0.055 },
+    { name: 'RED',  color: '#fb7185', rim: '#be123c', noiseA: 0.055, noiseP: 0.075 }
+  ].map((p) => Object.assign(p, { ball: { x: 0, y: 0, vx: 0, vy: 0 }, strokes: 0, holed: false, hidden: false, sunk: null, lastPos: [0, 0], wins: 0, total: 0 }));
+  const PICKUP_OVER_PAR = 5;   // stuck for ages? pick up at par + 6
+
   const game = {
     holeIdx: 0, hole: null, segs: [],
-    phase: 'idle',            // idle | rolling | sunk
-    strokes: 0, sunkTimer: 0, sunkFrom: null, fade: 1, banner: null,
-    lastPos: [0, 0], splash: null, t: 0, round: 0, roundPar: 0
+    phase: 'idle',            // idle | rolling | holing | sunk (= hole finished)
+    active: 0, honors: 0, holingTimer: 0, sunkTimer: 0, fade: 1, banner: null, splash: null, t: 0
   };
-  const ball = { x: 0, y: 0, vx: 0, vy: 0 };
+  let ball = players[0].ball;   // the active golfer's ball (physics code below works on this)
+  const pl = () => players[game.active];
   const input = { x: 0, y: 0, dragging: false, lastActive: 0 };
   let botAim = null;
 
@@ -140,16 +148,35 @@
   // ---- Hole setup / static background ------------------------------------------------
   function loadHole(i) {
     game.holeIdx = i % HOLES.length;
-    if (game.holeIdx === 0) { game.round = 0; game.roundPar = 0; }
+    if (game.holeIdx === 0) players.forEach((p) => { p.wins = 0; p.total = 0; });
     const h = (game.hole = HOLES[game.holeIdx]);
     game.segs = polyEdges(h.poly);
     h.obst.forEach((o) => game.segs.push(...polyEdges(o)));
-    ball.x = h.tee[0]; ball.y = h.tee[1]; ball.vx = ball.vy = 0;
-    game.lastPos = [ball.x, ball.y];
-    game.strokes = 0; game.phase = 'idle'; game.sunkTimer = 0; game.banner = null; game.splash = null;
+    players.forEach((p) => {
+      p.ball.x = h.tee[0]; p.ball.y = h.tee[1]; p.ball.vx = p.ball.vy = 0;
+      p.lastPos = [h.tee[0], h.tee[1]];
+      p.strokes = 0; p.holed = false; p.hidden = false; p.sunk = null;
+    });
+    game.sunkTimer = 0; game.holingTimer = 0; game.banner = null; game.splash = null;
     game.fade = 1;
     botAim = null;
     buildBackground();
+    nextTurn();
+  }
+
+  // Who plays next: the golfer still out there who is farthest from the cup (honors breaks ties).
+  function nextTurn() {
+    const h = game.hole;
+    const pending = players.map((p, i) => i).filter((i) => !players[i].holed);
+    if (!pending.length) { holeComplete(); return; }
+    let pick = pending[0];
+    if (pending.length > 1) {
+      const dist = (i) => Math.hypot(players[i].ball.x - h.cup[0], players[i].ball.y - h.cup[1]);
+      const d0 = dist(0), d1 = dist(1);
+      pick = Math.abs(d0 - d1) < 1 ? game.honors : d0 > d1 ? 0 : 1;
+    }
+    game.active = pick; ball = players[pick].ball;
+    game.phase = 'idle'; botAim = null;
   }
 
   function pathPoly(c, p) { c.beginPath(); p.forEach((q, i) => (i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]))); c.closePath(); }
@@ -209,18 +236,40 @@
   // ---- Shooting & physics -----------------------------------------------------------
   function shoot(angle, v0) {
     ball.vx = Math.cos(angle) * v0; ball.vy = Math.sin(angle) * v0;
-    game.lastPos = [ball.x, ball.y];
-    game.strokes++; game.phase = 'rolling';
+    pl().lastPos = [ball.x, ball.y];
+    pl().strokes++; game.phase = 'rolling';
   }
 
+  // The active golfer's ball dropped in the cup.
   function holeOut() {
-    game.phase = 'sunk'; game.sunkTimer = 0; game.sunkFrom = [ball.x, ball.y];
-    const d = game.strokes - game.hole.par;
-    const label = game.strokes === 1 ? 'HOLE IN ONE!' : d <= -2 ? 'EAGLE!' : d === -1 ? 'BIRDIE!' : d === 0 ? 'PAR' : d === 1 ? 'BOGEY' : '+' + d;
-    game.round += game.strokes; game.roundPar += game.hole.par;
-    let sub = game.strokes + (game.strokes === 1 ? ' STROKE' : ' STROKES');
-    if (game.holeIdx === HOLES.length - 1) sub += '   ·   ROUND ' + game.round + ' (PAR ' + game.roundPar + ')';
-    game.banner = { title: label, sub, t: 0 };
+    const p = pl();
+    p.holed = true; p.sunk = { from: [ball.x, ball.y] };
+    ball.vx = ball.vy = 0;
+    game.phase = 'holing'; game.holingTimer = 0;
+  }
+
+  // Ball came to rest (or splashed): pick up if stuck forever, then hand over to whoever is next.
+  function endShot() {
+    const p = pl();
+    if (!p.holed && p.strokes >= game.hole.par + PICKUP_OVER_PAR) { p.holed = true; p.hidden = true; p.strokes = game.hole.par + PICKUP_OVER_PAR + 1; }
+    nextTurn();
+  }
+
+  function holeComplete() {
+    const [a, b] = players, h = game.hole;
+    players.forEach((p) => { p.total += p.strokes; });
+    const winner = a.strokes === b.strokes ? -1 : a.strokes < b.strokes ? 0 : 1;
+    if (winner >= 0) { players[winner].wins++; game.honors = winner; }
+    const nm = (p) => p.name + ' ' + p.strokes;
+    let title = winner < 0 ? 'HALVED' : players[winner].name + ' WINS THE HOLE';
+    let sub = nm(a) + '   ·   ' + nm(b) + '   ·   PAR ' + h.par;
+    if (game.holeIdx === HOLES.length - 1) {
+      const mw = a.wins === b.wins ? -1 : a.wins > b.wins ? 0 : 1;
+      title = mw < 0 ? 'MATCH TIED ' + a.wins + '-' + b.wins : players[mw].name + ' WINS THE MATCH ' + Math.max(a.wins, b.wins) + '-' + Math.min(a.wins, b.wins);
+      sub = 'TOTAL STROKES   BLUE ' + a.total + '   ·   RED ' + b.total;
+    }
+    game.phase = 'sunk'; game.sunkTimer = 0;
+    game.banner = { title, sub, t: 0, color: winner < 0 ? '#ffffff' : players[winner].color };
   }
 
   function stepBall(dt) {
@@ -246,14 +295,14 @@
 
     if (inWater(ball.x, ball.y, 0)) {            // splash: back to last spot, +1 penalty stroke
       game.splash = { x: ball.x, y: ball.y, t: 0 };
-      ball.x = game.lastPos[0]; ball.y = game.lastPos[1]; ball.vx = ball.vy = 0;
-      game.strokes++; game.phase = 'idle';
+      ball.x = pl().lastPos[0]; ball.y = pl().lastPos[1]; ball.vx = ball.vy = 0;
+      pl().strokes++; endShot();
       return;
     }
 
     const speed = Math.hypot(ball.vx, ball.vy);
     if (Math.hypot(ball.x - h.cup[0], ball.y - h.cup[1]) < CUP_R - 3 && speed < CAPTURE_SPEED) { holeOut(); return; }
-    if (speed < 8) { ball.vx = ball.vy = 0; game.phase = 'idle'; }
+    if (speed < 8) { ball.vx = ball.vy = 0; endShot(); }
   }
 
   // ---- CPU golfer ------------------------------------------------------------------
@@ -273,8 +322,9 @@
       else { toCup = true; }   // nothing better: just have a go
     }
     const d = Math.hypot(tx - ball.x, ty - ball.y);
-    const angle = Math.atan2(ty - ball.y, tx - ball.x) + (Math.random() * 2 - 1) * 0.03;
-    const v0 = Math.min(MAXV, d * K * (toCup ? 1.1 : 1.0) * (fromSand ? 2.5 : 1) * (1 + (Math.random() * 2 - 1) * 0.03));
+    const p = pl();
+    const angle = Math.atan2(ty - ball.y, tx - ball.x) + (Math.random() * 2 - 1) * p.noiseA;
+    const v0 = Math.min(MAXV, d * K * (toCup ? 1.1 : 1.0) * (fromSand ? 2.5 : 1) * (1 + (Math.random() * 2 - 1) * p.noiseP));
     botAim = { angle, v0, t: 0 };
   }
 
@@ -368,17 +418,25 @@
     ctx.fillStyle = '#ef4444';
     ctx.beginPath(); ctx.moveTo(cx, cy - 115); ctx.lineTo(cx + 52 + wave, cy - 100); ctx.lineTo(cx, cy - 82); ctx.closePath(); ctx.fill();
 
-    // ball
-    let bx = ball.x, by = ball.y, br = R;
-    if (game.phase === 'sunk') {
-      const p = Math.min(1, game.sunkTimer / 0.3);
-      bx = game.sunkFrom[0] + (cx - game.sunkFrom[0]) * p; by = game.sunkFrom[1] + (cy - game.sunkFrom[1]) * p; br = R * (1 - 0.85 * p);
-    }
-    ctx.fillStyle = 'rgba(0,0,0,0.28)';
-    ctx.beginPath(); ctx.arc(bx + 4, by + 5, br, 0, Math.PI * 2); ctx.fill();
-    const bg = ctx.createRadialGradient(bx - br * 0.4, by - br * 0.4, 1, bx, by, br);
-    bg.addColorStop(0, '#ffffff'); bg.addColorStop(1, '#d4dbe5');
-    ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+    // balls (the golfer whose turn it is gets a pulsing ring)
+    players.forEach((p, idx) => {
+      if (p.hidden) return;
+      let bx = p.ball.x, by = p.ball.y, br = R;
+      if (p.sunk) {
+        const t = idx === game.active && game.phase === 'holing' ? Math.min(1, game.holingTimer / 0.3) : 1;
+        if (t >= 1) return;                                   // fully in the cup
+        bx = p.sunk.from[0] + (cx - p.sunk.from[0]) * t; by = p.sunk.from[1] + (cy - p.sunk.from[1]) * t; br = R * (1 - 0.85 * t);
+      }
+      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      ctx.beginPath(); ctx.arc(bx + 4, by + 5, br, 0, Math.PI * 2); ctx.fill();
+      const bg = ctx.createRadialGradient(bx - br * 0.4, by - br * 0.4, 1, bx, by, br);
+      bg.addColorStop(0, '#ffffff'); bg.addColorStop(0.35, p.color); bg.addColorStop(1, p.rim);
+      ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+      if (idx === game.active && game.phase === 'idle') {
+        ctx.save(); ctx.strokeStyle = p.color; ctx.lineWidth = 3; ctx.globalAlpha = 0.5 + 0.4 * Math.sin(game.t * 6);
+        ctx.beginPath(); ctx.arc(bx, by, br + 9 + Math.sin(game.t * 6) * 2, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+      }
+    });
 
     // aim indicators
     if (game.phase === 'idle') {
@@ -392,7 +450,7 @@
         }
       } else if (botAim) {
         const pw = botAim.v0 / MAXV;
-        drawAim(botAim.angle, pw, 'rgba(255,255,255,0.9)');
+        drawAim(botAim.angle, pw, pl().color);
       }
     }
 
@@ -404,10 +462,22 @@
       ctx.font = '700 40px ' + FONT; ctx.textAlign = 'left';
       ctx.fillText('HOLE ' + (game.holeIdx + 1) + ' / ' + HOLES.length, 60, 80);
       ctx.font = '600 26px ' + FONT; ctx.fillStyle = '#d1fae5';
-      ctx.fillText('PAR ' + h.par + '   ·   STROKES ' + game.strokes, 60, 118);
+      ctx.fillText('PAR ' + h.par, 60, 118);
+      // scoreboard, top-right: strokes this hole, holes won, total strokes
+      players.forEach((p, i) => {
+        const y = 62 + i * 38;
+        const turn = i === game.active && game.phase === 'idle';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = turn ? '#ffffff' : '#cbd5c0'; ctx.font = (turn ? '800 ' : '600 ') + '28px ' + FONT;
+        const text = p.name + '  ' + p.strokes + (p.holed ? ' ✓' : '') + '    won ' + p.wins + '  ·  total ' + p.total;
+        ctx.fillText(text, W - 60, y);
+        const tw = ctx.measureText(text).width;
+        ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(W - 60 - tw - 24, y - 10, 10, 0, Math.PI * 2); ctx.fill();
+      });
+      ctx.textAlign = 'left';
       if (nowSec() - input.lastActive < 4) {
-        ctx.textAlign = 'right'; ctx.font = '600 24px ' + FONT; ctx.fillStyle = '#ecfccb';
-        ctx.fillText('Drag back & release to putt', W - 60, 80);
+        ctx.textAlign = 'center'; ctx.font = '600 26px ' + FONT; ctx.fillStyle = '#ecfccb';
+        ctx.fillText('Drag back & release to take the shot', W / 2, H - 50);
       }
       ctx.restore();
     }
@@ -416,7 +486,7 @@
       ctx.save(); ctx.globalAlpha = a;
       ctx.fillStyle = 'rgba(8, 24, 14, 0.72)'; ctx.fillRect(W / 2 - 440, H / 2 - 95, 880, 190);
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#ffffff'; ctx.font = 'italic 800 88px ' + FONT; ctx.fillText(b.title, W / 2, H / 2 - 18);
+      ctx.fillStyle = b.color || '#ffffff'; ctx.font = 'italic 800 ' + (b.title.length > 18 ? 56 : 80) + 'px ' + FONT; ctx.fillText(b.title, W / 2, H / 2 - 18);
       ctx.fillStyle = '#fde047'; ctx.font = '600 32px ' + FONT; ctx.fillText(b.sub, W / 2, H / 2 + 52);
       ctx.restore();
     }
@@ -446,9 +516,12 @@
     if (game.phase === 'rolling') {
       const n = 6;
       for (let i = 0; i < n && game.phase === 'rolling'; i++) stepBall(dt / n);
+    } else if (game.phase === 'holing') {
+      game.holingTimer += dt;
+      if (game.holingTimer > 0.6) nextTurn();
     } else if (game.phase === 'sunk') {
       game.sunkTimer += dt;
-      if (game.sunkTimer > 2.0) loadHole(game.holeIdx + 1);
+      if (game.sunkTimer > 2.6) loadHole(game.holeIdx + 1);
     } else if (game.phase === 'idle' && opts.auto && !input.dragging && nowSec() - input.lastActive > opts.delay) {
       if (!botAim) planBot();
       else { botAim.t += dt; if (botAim.t > 1.0) { const b = botAim; botAim = null; shoot(b.angle, b.v0); } }
@@ -457,7 +530,7 @@
   }
 
   window.__golfLoad = (i) => loadHole(i);
-  window.__golf = () => ({ hole: game.holeIdx, phase: game.phase, strokes: game.strokes, par: game.hole.par, ball: [ball.x, ball.y], bot: !!botAim });
+  window.__golf = () => ({ hole: game.holeIdx, phase: game.phase, active: game.active, par: game.hole.par, strokes: players.map((p) => p.strokes), holed: players.map((p) => p.holed), wins: players.map((p) => p.wins), ball: [ball.x, ball.y], bot: !!botAim });
 
   window.addEventListener('resize', resize);
   resize();
