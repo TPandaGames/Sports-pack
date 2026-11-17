@@ -876,11 +876,6 @@
   }
 
   // Runtime property hooks (Lively Wallpaper / Wallpaper Engine)
-  window.livelyPropertyListener = function (name, val) {
-    if (name === 'hud') opts.hud = !!val;
-    else if (name === 'diff' && AI_PROFILES[val]) opts.diff = val;
-    else if (name === 'goals') opts.goals = Math.max(1, parseInt(val, 10) || 5);
-  };
   window.wallpaperPropertyListener = {
     applyUserProperties: function (p) {
       if (p.hud) opts.hud = !!p.hud.value;
