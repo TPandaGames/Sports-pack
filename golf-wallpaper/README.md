@@ -1,6 +1,6 @@
 # Golf Wallpaper
 
-Top-down mini golf: 3 holes (a bumper, a dogleg, and a water hazard + sand trap) that loop forever. No assets, fully offline.
+Top-down mini golf: 9 holes that loop forever (bumper, dogleg, water + sand, S-curve, a narrow gate, bunker, lake, U-turn and a final gauntlet). The last hole shows your round total vs. par. No assets, fully offline.
 
 - **Interactive:** open `index.html` in a browser. Drag back from anywhere and release to putt, like a slingshot.
   The arrow shows direction and power (yellow -> red).

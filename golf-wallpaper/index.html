@@ -49,7 +49,39 @@
       obst: [], water: null, sand: null, route: [[1000, 300]] },
     { par: 3, tee: [260, 450], cup: [1340, 450],
       poly: [[150, 200], [1450, 200], [1450, 700], [150, 700]],
-      obst: [], water: { x: 800, y: 450, r: 120 }, sand: { x: 1050, y: 380, w: 120, h: 140 }, route: [[800, 265]] }
+      obst: [], water: { x: 800, y: 450, r: 120 }, sand: { x: 1050, y: 380, w: 120, h: 140 }, route: [[800, 265], [1250, 265]] },
+
+    // 4: S-curve - three long arms joined by short connectors
+    { par: 5, tee: [260, 200], cup: [1180, 640],
+      poly: [[200, 130], [1250, 130], [1250, 490], [340, 490], [340, 570], [1250, 570], [1250, 710], [200, 710], [200, 350], [1110, 350], [1110, 270], [200, 270]],
+      obst: [], water: null, sand: null, route: [[1180, 200], [1180, 420], [270, 420], [270, 640]] },
+
+    // 5: The gate - thread the needle through a narrow gap
+    { par: 3, tee: [260, 250], cup: [1340, 650],
+      poly: [[150, 200], [1450, 200], [1450, 700], [150, 700]],
+      obst: [[[780, 200], [840, 200], [840, 420], [780, 420]], [[780, 500], [840, 500], [840, 700], [780, 700]]],
+      water: null, sand: null, route: [[700, 460], [900, 460]] },
+
+    // 6: Bunker - a big sand trap guards the middle; the free strip is along the top
+    { par: 3, tee: [260, 300], cup: [1340, 600],
+      poly: [[150, 250], [1450, 250], [1450, 650], [150, 650]],
+      obst: [], water: null, sand: { x: 600, y: 350, w: 400, h: 300 }, route: [[1000, 300]] },
+
+    // 7: Lake - the direct diagonal is all water; go round the bottom
+    { par: 3, tee: [260, 650], cup: [1340, 250],
+      poly: [[150, 150], [1450, 150], [1450, 750], [150, 750]],
+      obst: [], water: { x: 800, y: 450, r: 150 }, sand: null, route: [[900, 655]] },
+
+    // 8: U-turn - down one arm, across the bottom, up the other
+    { par: 3, tee: [350, 250], cup: [1250, 250],
+      poly: [[200, 150], [500, 150], [500, 560], [1100, 560], [1100, 150], [1400, 150], [1400, 750], [200, 750]],
+      obst: [], water: null, sand: null, route: [[350, 650], [1250, 650]] },
+
+    // 9: The gauntlet - two staggered barriers
+    { par: 4, tee: [220, 540], cup: [1400, 450],
+      poly: [[120, 300], [1480, 300], [1480, 600], [120, 600]],
+      obst: [[[500, 300], [550, 300], [550, 480], [500, 480]], [[950, 420], [1000, 420], [1000, 600], [950, 600]]],
+      water: null, sand: null, route: [[700, 540], [850, 360], [1100, 360]] }
   ];
 
   const canvas = document.getElementById('c');
@@ -62,7 +94,7 @@
     holeIdx: 0, hole: null, segs: [],
     phase: 'idle',            // idle | rolling | sunk
     strokes: 0, sunkTimer: 0, sunkFrom: null, fade: 1, banner: null,
-    lastPos: [0, 0], splash: null, t: 0
+    lastPos: [0, 0], splash: null, t: 0, round: 0, roundPar: 0
   };
   const ball = { x: 0, y: 0, vx: 0, vy: 0 };
   const input = { x: 0, y: 0, dragging: false, lastActive: 0 };
@@ -90,12 +122,13 @@
     return !!s && x > s.x && x < s.x + s.w && y > s.y && y < s.y + s.h;
   }
 
-  function lineClear(ax, ay, bx, by) {
+  function lineClear(ax, ay, bx, by, avoidSand) {
     const d = Math.hypot(bx - ax, by - ay);
     const n = Math.max(1, Math.ceil(d / 6));
     for (let i = 0; i <= n; i++) {
       const x = ax + ((bx - ax) * i) / n, y = ay + ((by - ay) * i) / n;
       if (inWater(x, y, R + 2)) return false;
+      if (avoidSand && inSand(x, y)) return false;
       for (const [a, b] of game.segs) {
         const c = closestOnSeg(x, y, a, b);
         if (Math.hypot(x - c[0], y - c[1]) < R - 2) return false;
@@ -107,6 +140,7 @@
   // ---- Hole setup / static background ------------------------------------------------
   function loadHole(i) {
     game.holeIdx = i % HOLES.length;
+    if (game.holeIdx === 0) { game.round = 0; game.roundPar = 0; }
     const h = (game.hole = HOLES[game.holeIdx]);
     game.segs = polyEdges(h.poly);
     h.obst.forEach((o) => game.segs.push(...polyEdges(o)));
@@ -183,7 +217,10 @@
     game.phase = 'sunk'; game.sunkTimer = 0; game.sunkFrom = [ball.x, ball.y];
     const d = game.strokes - game.hole.par;
     const label = game.strokes === 1 ? 'HOLE IN ONE!' : d <= -2 ? 'EAGLE!' : d === -1 ? 'BIRDIE!' : d === 0 ? 'PAR' : d === 1 ? 'BOGEY' : '+' + d;
-    game.banner = { title: label, sub: game.strokes + (game.strokes === 1 ? ' STROKE' : ' STROKES'), t: 0 };
+    game.round += game.strokes; game.roundPar += game.hole.par;
+    let sub = game.strokes + (game.strokes === 1 ? ' STROKE' : ' STROKES');
+    if (game.holeIdx === HOLES.length - 1) sub += '   ·   ROUND ' + game.round + ' (PAR ' + game.roundPar + ')';
+    game.banner = { title: label, sub, t: 0 };
   }
 
   function stepBall(dt) {
@@ -223,19 +260,21 @@
   function planBot() {
     const h = game.hole;
     let tx = h.cup[0], ty = h.cup[1], toCup = true;
-    if (!lineClear(ball.x, ball.y, tx, ty)) {
+    const fromSand = inSand(ball.x, ball.y);
+    const avoid = !fromSand;               // stay out of sand unless already stuck in it
+    if (!lineClear(ball.x, ball.y, tx, ty, avoid)) {
       toCup = false;
       let found = null;
       for (let i = h.route.length - 1; i >= 0; i--) {
         const w = h.route[i];
-        if (Math.hypot(w[0] - ball.x, w[1] - ball.y) > 50 && lineClear(ball.x, ball.y, w[0], w[1])) { found = w; break; }
+        if (Math.hypot(w[0] - ball.x, w[1] - ball.y) > 50 && lineClear(ball.x, ball.y, w[0], w[1], avoid)) { found = w; break; }
       }
       if (found) { tx = found[0]; ty = found[1]; }
       else { toCup = true; }   // nothing better: just have a go
     }
     const d = Math.hypot(tx - ball.x, ty - ball.y);
     const angle = Math.atan2(ty - ball.y, tx - ball.x) + (Math.random() * 2 - 1) * 0.03;
-    const v0 = Math.min(MAXV, d * K * (toCup ? 1.1 : 1.0) * (1 + (Math.random() * 2 - 1) * 0.03));
+    const v0 = Math.min(MAXV, d * K * (toCup ? 1.1 : 1.0) * (fromSand ? 2.5 : 1) * (1 + (Math.random() * 2 - 1) * 0.03));
     botAim = { angle, v0, t: 0 };
   }
 
@@ -363,7 +402,7 @@
       ctx.save();
       ctx.globalAlpha = 0.75; ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'alphabetic';
       ctx.font = '700 40px ' + FONT; ctx.textAlign = 'left';
-      ctx.fillText('HOLE ' + (game.holeIdx + 1), 60, 80);
+      ctx.fillText('HOLE ' + (game.holeIdx + 1) + ' / ' + HOLES.length, 60, 80);
       ctx.font = '600 26px ' + FONT; ctx.fillStyle = '#d1fae5';
       ctx.fillText('PAR ' + h.par + '   ·   STROKES ' + game.strokes, 60, 118);
       if (nowSec() - input.lastActive < 4) {
@@ -375,7 +414,7 @@
     if (game.banner) {
       const b = game.banner, a = Math.min(1, b.t / 0.2);
       ctx.save(); ctx.globalAlpha = a;
-      ctx.fillStyle = 'rgba(8, 24, 14, 0.72)'; ctx.fillRect(W / 2 - 340, H / 2 - 95, 680, 190);
+      ctx.fillStyle = 'rgba(8, 24, 14, 0.72)'; ctx.fillRect(W / 2 - 440, H / 2 - 95, 880, 190);
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillStyle = '#ffffff'; ctx.font = 'italic 800 88px ' + FONT; ctx.fillText(b.title, W / 2, H / 2 - 18);
       ctx.fillStyle = '#fde047'; ctx.font = '600 32px ' + FONT; ctx.fillText(b.sub, W / 2, H / 2 + 52);
@@ -417,7 +456,8 @@
     render();
   }
 
-  window.__golf = () => ({ hole: game.holeIdx, phase: game.phase, strokes: game.strokes, ball: [ball.x, ball.y], bot: !!botAim });
+  window.__golfLoad = (i) => loadHole(i);
+  window.__golf = () => ({ hole: game.holeIdx, phase: game.phase, strokes: game.strokes, par: game.hole.par, ball: [ball.x, ball.y], bot: !!botAim });
 
   window.addEventListener('resize', resize);
   resize();
