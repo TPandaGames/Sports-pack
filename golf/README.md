@@ -17,7 +17,7 @@ Page options: `index.html?hud=0&auto=0&delay=8&fps=30`
 
 ## Windows desktop wallpaper (nothing to install)
 Double-click [`windows/start.bat`](windows/start.bat); stop with [`windows/stop.bat`](windows/stop.bat).
-Same PowerShell + Edge method as the hockey wallpaper (see [`../wallpaper/README.md`](../wallpaper/README.md)); options:
+Same PowerShell + Edge method as the hockey wallpaper (see [`../hockey/wallpaper/README.md`](../hockey/wallpaper/README.md)); options:
 `golf-wallpaper.ps1 -Fps 30 -NoHud`, `-InstallStartup`, `-RemoveStartup`. Primary monitor only.
 Starting one wallpaper doesn't stop the other, so run the matching `stop.bat` first when switching.
 
