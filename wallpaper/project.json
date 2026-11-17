@@ -1,0 +1,14 @@
+{
+  "title": "Arcade Ice Hockey",
+  "type": "web",
+  "file": "index.html",
+  "description": "CPU vs CPU arcade ice hockey, live on your desktop.",
+  "general": {
+    "properties": {
+      "hud":   { "type": "bool",  "text": "Show scoreboard", "value": true, "order": 1 },
+      "diff":  { "type": "combo", "text": "CPU skill", "value": "pro", "order": 2,
+                 "options": [ {"label":"Rookie","value":"rookie"}, {"label":"Pro","value":"pro"}, {"label":"All-Star","value":"allstar"} ] },
+      "goals": { "type": "slider", "text": "Goals to win", "value": 5, "min": 1, "max": 15, "step": 1, "order": 3 }
+    }
+  }
+}

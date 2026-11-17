@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Starter wallpaper</title>
+<!--
+  The starter pack for BE-Aero live wallpapers (docs/WALLPAPERS.md).
+  Copy this folder, change wallpaper.json (at least "id" and "name"), and replace draw() with your own.
+  Everything a pack must do is here already:
+    - fills the window at any size, sharp on high-DPI displays, redraws on resize
+    - stops drawing when the host says pause(true)
+    - takes the cursor from aeroWallpaper.mouse, not from mouse events
+    - loads nothing from the internet
+-->
+<style>
+  html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: #0b1020; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  let w = 0, h = 0, paused = false;
+  const cursor = { x: 0.5, y: 0.5, on: false };       // fractions of the page, from the host
+
+  // The page fills the primary display. Size the canvas in device pixels (capped at 2x: 4K stays affordable).
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    w = innerWidth; h = innerHeight;
+    canvas.width = Math.floor(w * dpr); canvas.height = Math.floor(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);            // draw in CSS pixels from here on
+  }
+
+  // One frame. Replace with your own drawing. t: seconds since the page started.
+  function draw(t) {
+    const g = ctx.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0, `hsl(${(t * 6) % 360}, 45%, 14%)`);
+    g.addColorStop(1, `hsl(${(t * 6 + 120) % 360}, 45%, 9%)`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    if (cursor.on) {
+      const r = Math.min(w, h) * 0.12;
+      const glow = ctx.createRadialGradient(cursor.x * w, cursor.y * h, 0, cursor.x * w, cursor.y * h, r);
+      glow.addColorStop(0, 'rgba(160, 200, 255, 0.25)'); glow.addColorStop(1, 'rgba(160, 200, 255, 0)');
+      ctx.fillStyle = glow; ctx.fillRect(0, 0, w, h);
+    }
+  }
+
+  // The loop: while paused, nothing is drawn and the page only looks again every 400 ms.
+  function frame(ms) {
+    if (paused) { setTimeout(() => requestAnimationFrame(frame), 400); return; }
+    draw(ms / 1000);
+    requestAnimationFrame(frame);
+  }
+
+  // What the host calls. Define it at once (before the page finishes loading): the first calls come right after.
+  window.aeroWallpaper = {
+    pause(on) { paused = !!on; },
+    mouse(x, y, click) {
+      if (x < 0) { cursor.on = false; return; }        // the cursor left the bare desktop
+      cursor.x = x; cursor.y = y; cursor.on = true;
+      if (click) { /* the user clicked the desktop at (x, y): react if you like */ }
+    },
+    option(name, value) { /* 'gpu': WebGPU effects on (true) or off (false) - see the docs if you use WebGPU */ }
+  };
+
+  addEventListener('resize', resize);
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

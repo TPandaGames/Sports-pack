@@ -1,0 +1,1749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Arcade Ice Hockey</title>
+  <!-- Load Tailwind CSS for lightweight, responsive UI chrome -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,600;0,700;1,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #090e17;
+      --panel-bg: #111927;
+      --border-subtle: #1e293b;
+      --accent-blue: #38bdf8;
+      --accent-red: #f43f5e;
+    }
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: var(--bg-dark);
+      color: #f8fafc;
+      font-family: 'Inter', sans-serif;
+      overflow-x: hidden;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .font-arcade {
+      font-family: 'Chakra Petch', sans-serif;
+    }
+
+    /* Rink wrapper ensures smooth scaling on any PC screen */
+    #rink-wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 1020px;
+      aspect-ratio: 16 / 9;
+      border-radius: 24px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.75), 0 0 0 3px #1e293b;
+      background: #e2f1f8;
+      overflow: hidden;
+      touch-action: none;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: none;
+    }
+
+    canvas.keyboard-mode {
+      cursor: default;
+    }
+
+    /* Custom tactile arcade buttons */
+    .btn-arcade {
+      background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+      border: 1px solid #334155;
+      box-shadow: 0 3px 0 #090e17;
+      transition: all 0.12s ease;
+    }
+    .btn-arcade:hover {
+      border-color: #475569;
+      transform: translateY(-1px);
+    }
+    .btn-arcade:active {
+      transform: translateY(2px);
+      box-shadow: 0 1px 0 #090e17;
+    }
+    .btn-arcade.active-blue {
+      background: linear-gradient(180deg, #0284c7 0%, #0369a1 100%);
+      border-color: #38bdf8;
+      color: #ffffff;
+    }
+    .btn-arcade.active-red {
+      background: linear-gradient(180deg, #e11d48 0%, #be123c 100%);
+      border-color: #fb7185;
+      color: #ffffff;
+    }
+
+    /* Subtle goal flash overlay */
+    @keyframes goalFlash {
+      0% { opacity: 0.55; }
+      100% { opacity: 0; }
+    }
+    .goal-flash {
+      animation: goalFlash 0.65s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="p-2 sm:p-4">
+
+  <!-- Top Scoreboard & Match HUD -->
+  <header class="w-full max-w-[1020px] mb-2.5 sm:mb-3 bg-[#111927]/95 border border-slate-800 rounded-2xl px-3 py-2 sm:px-5 sm:py-3 shadow-xl flex flex-wrap items-center justify-between gap-2">
+    
+    <!-- Player Score -->
+    <div class="flex items-center gap-2.5 sm:gap-3">
+      <div class="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-sky-400 shadow-[0_0_12px_#38bdf8]"></div>
+      <div>
+        <div class="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-sky-400">You (Home)</div>
+        <div id="player-score" class="font-arcade text-2xl sm:text-3xl font-bold leading-none text-white">0</div>
+      </div>
+    </div>
+
+    <!-- Center Clock / Mode Status -->
+    <div class="flex flex-col items-center justify-center bg-slate-950/90 border border-slate-800 rounded-xl px-4 py-1.5 min-w-[130px] sm:min-w-[165px]">
+      <div id="hud-mode-label" class="text-[10px] font-bold uppercase tracking-widest text-slate-400">FIRST TO 7</div>
+      <div id="hud-clock" class="font-arcade text-xl sm:text-2xl font-bold text-amber-400 tracking-wider leading-tight">7 GOALS</div>
+      <div id="hud-boost-bar-wrap" class="w-full h-1.5 bg-slate-800 rounded-full mt-1 overflow-hidden" title="Slapshot Dash Energy">
+        <div id="hud-boost-bar" class="h-full bg-sky-400 transition-all duration-75" style="width: 100%;"></div>
+      </div>
+    </div>
+
+    <!-- AI Score -->
+    <div class="flex items-center gap-2.5 sm:gap-3 text-right">
+      <div>
+        <div id="ai-label" class="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-rose-400">CPU (Pro)</div>
+        <div id="ai-score" class="font-arcade text-2xl sm:text-3xl font-bold leading-none text-white">0</div>
+      </div>
+      <div class="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-rose-500 shadow-[0_0_12px_#f43f5e]"></div>
+    </div>
+  </header>
+
+  <!-- Main Ice Rink Canvas Area -->
+  <main id="rink-wrapper">
+    <canvas id="hockeyCanvas"></canvas>
+
+    <!-- Goal Flash Effect Layer -->
+    <div id="flash-overlay" class="pointer-events-none absolute inset-0 opacity-0"></div>
+
+    <!-- Floating Goal / Event Banner -->
+    <div id="banner-overlay" class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center opacity-0 transition-opacity duration-200">
+      <div id="banner-title" class="font-arcade text-5xl sm:text-7xl font-bold italic tracking-wider text-white drop-shadow-[0_6px_20px_rgba(0,0,0,0.65)] px-6 py-2 rounded-2xl bg-slate-900/75 border border-white/20 backdrop-blur-sm">
+        GOAL!
+      </div>
+      <div id="banner-sub" class="mt-2 font-semibold text-sm sm:text-base uppercase tracking-widest text-amber-300 bg-slate-950/80 px-4 py-1 rounded-full">
+        FACE-OFF READY
+      </div>
+    </div>
+
+    <!-- Start / Pause / Game Over Modal Overlay -->
+    <div id="menu-overlay" class="absolute inset-0 bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center p-4 sm:p-6 text-center z-20">
+      <div class="max-w-md w-full bg-[#111927] border border-slate-700/80 rounded-3xl p-5 sm:p-7 shadow-2xl">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/15 border border-sky-400/30 text-sky-300 text-xs font-bold uppercase tracking-widest mb-3">
+          <span>60 FPS Lightweight Engine</span>
+        </div>
+        <h1 id="modal-title" class="font-arcade text-3xl sm:text-4xl font-bold text-white tracking-wide mb-2">
+          ARCADE ICE HOCKEY
+        </h1>
+        <p id="modal-subtitle" class="text-slate-300 text-xs sm:text-sm mb-5 leading-relaxed">
+          Move with <span class="text-sky-400 font-semibold">Mouse</span> or <span class="text-sky-400 font-semibold">WASD / Arrows</span>. Press <span class="text-amber-400 font-semibold">Left Click</span> or <span class="text-amber-400 font-semibold">Spacebar</span> for a Slapshot Dash!
+        </p>
+
+        <!-- Quick Setup Selectors inside Modal -->
+        <div class="grid grid-cols-2 gap-2.5 mb-5 text-left">
+          <div class="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
+            <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">AI Difficulty</label>
+            <div class="flex gap-1" id="modal-diff-group">
+              <button data-diff="rookie" class="diff-btn flex-1 py-1.5 rounded-lg text-xs font-semibold btn-arcade">Rookie</button>
+              <button data-diff="pro" class="diff-btn flex-1 py-1.5 rounded-lg text-xs font-semibold btn-arcade active-blue">Pro</button>
+              <button data-diff="allstar" class="diff-btn flex-1 py-1.5 rounded-lg text-xs font-semibold btn-arcade">All-Star</button>
+            </div>
+          </div>
+
+          <div class="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
+            <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Match Format</label>
+            <div class="flex gap-1" id="modal-mode-group">
+              <button data-mode="first7" class="mode-btn flex-1 py-1.5 rounded-lg text-xs font-semibold btn-arcade active-blue">First to 7</button>
+              <button data-mode="timed" class="mode-btn flex-1 py-1.5 rounded-lg text-xs font-semibold btn-arcade">2 Min Timed</button>
+            </div>
+          </div>
+        </div>
+
+        <button id="start-btn" class="w-full py-3.5 rounded-2xl font-arcade text-lg sm:text-xl font-bold tracking-wider uppercase text-white bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 shadow-[0_6px_0_#0369a1] active:translate-y-1 active:shadow-[0_2px_0_#0369a1] transition-all cursor-pointer">
+          DROP THE PUCK
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Bottom Control Bar (Always accessible during play) -->
+  <footer class="w-full max-w-[1020px] mt-2.5 sm:mt-3 bg-[#111927]/95 border border-slate-800 rounded-2xl px-3 py-2 sm:px-4 sm:py-2.5 shadow-lg flex flex-wrap items-center justify-between gap-2 text-xs">
+    
+    <!-- Control Input Toggle -->
+    <div class="flex items-center gap-1.5">
+      <span class="text-slate-400 font-semibold hidden sm:inline mr-1">Controls:</span>
+      <button id="ctrl-mouse-btn" class="btn-arcade active-blue px-3 py-1.5 rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer" title="Control striker with Mouse cursor">
+        <span>🖱️ Mouse</span>
+      </button>
+      <button id="ctrl-kb-btn" class="btn-arcade px-3 py-1.5 rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer" title="Control striker with WASD or Arrow keys">
+        <span>⌨️ WASD / Arrows</span>
+      </button>
+    </div>
+
+    <!-- Difficulty Quick-Switch -->
+    <div class="flex items-center gap-1">
+      <span class="text-slate-400 font-semibold hidden md:inline mr-1">CPU:</span>
+      <button data-diff="rookie" class="footer-diff-btn btn-arcade px-2.5 py-1.5 rounded-xl font-semibold cursor-pointer">Rookie</button>
+      <button data-diff="pro" class="footer-diff-btn btn-arcade active-blue px-2.5 py-1.5 rounded-xl font-semibold cursor-pointer">Pro</button>
+      <button data-diff="allstar" class="footer-diff-btn btn-arcade px-2.5 py-1.5 rounded-xl font-semibold cursor-pointer">All-Star</button>
+    </div>
+
+    <!-- Action Buttons: Sound, Pause, Reset -->
+    <div class="flex items-center gap-1.5">
+      <button id="mute-btn" class="btn-arcade px-3 py-1.5 rounded-xl font-semibold cursor-pointer" title="Toggle Web Audio Sound Effects">
+        🔊 SFX On
+      </button>
+      <button id="pause-btn" class="btn-arcade px-3 py-1.5 rounded-xl font-semibold cursor-pointer" title="Pause / Resume Match (P)">
+        ⏸️ Pause
+      </button>
+      <button id="reset-btn" class="btn-arcade px-3 py-1.5 rounded-xl font-semibold text-rose-300 hover:text-rose-200 cursor-pointer" title="Restart Match">
+        🔄 Reset
+      </button>
+    </div>
+  </footer>
+
+  <script>
+    /**
+     * ARCADE ICE HOCKEY - Lightweight 60FPS Single-File Engine
+     * Designed for zero-lag performance on any PC using pure HTML5 Canvas 2D & Web Audio API.
+     */
+    (function () {
+      'use strict';
+
+      // ==========================================
+      // 1. SYNTHESIZED WEB AUDIO SOUND ENGINE
+      // ==========================================
+      class SoundEngine {
+        constructor() {
+          this.ctx = null;
+          this.muted = false;
+          this.lastScrapeTime = 0;
+        }
+
+        init() {
+          if (!this.ctx) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (AudioCtx) {
+              this.ctx = new AudioCtx();
+            }
+          }
+          if (this.ctx && this.ctx.state === 'suspended') {
+            this.ctx.resume();
+          }
+        }
+
+        toggleMute() {
+          this.muted = !this.muted;
+          return this.muted;
+        }
+
+        // Crisp puck stick/striker hit sound
+        playPuckHit(intensity = 0.7) {
+          if (this.muted || !this.ctx) return;
+          try {
+            const now = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            const baseFreq = 180 + Math.min(intensity, 1.5) * 190;
+            osc.frequency.setValueAtTime(baseFreq, now);
+            osc.frequency.exponentialRampToValueAtTime(55, now + 0.08);
+
+            gain.gain.setValueAtTime(Math.min(0.45, 0.15 + intensity * 0.25), now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
+
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.09);
+          } catch (e) {}
+        }
+
+        // Board thud sound
+        playBoardBounce(speedRatio = 0.5) {
+          if (this.muted || !this.ctx || speedRatio < 0.08) return;
+          try {
+            const now = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(125, now);
+            osc.frequency.exponentialRampToValueAtTime(42, now + 0.07);
+
+            gain.gain.setValueAtTime(Math.min(0.32, speedRatio * 0.3), now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
+
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.08);
+          } catch (e) {}
+        }
+
+        // Metallic goal post clang
+        playPostClang() {
+          if (this.muted || !this.ctx) return;
+          try {
+            const now = this.ctx.currentTime;
+            [920, 1460, 2180].forEach((freq, idx) => {
+              const osc = this.ctx.createOscillator();
+              const gain = this.ctx.createGain();
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(freq, now);
+              gain.gain.setValueAtTime(0.14 / (idx + 1), now);
+              gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+              osc.connect(gain);
+              gain.connect(this.ctx.destination);
+              osc.start(now);
+              osc.stop(now + 0.29);
+            });
+          } catch (e) {}
+        }
+
+        // Slapshot dash whoosh
+        playDash() {
+          if (this.muted || !this.ctx) return;
+          try {
+            const now = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(140, now);
+            osc.frequency.exponentialRampToValueAtTime(420, now + 0.12);
+
+            gain.gain.setValueAtTime(0.12, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.14);
+          } catch (e) {}
+        }
+
+        // Subtle ice skate scrape on sharp turns/dashes
+        playIceScrape() {
+          if (this.muted || !this.ctx) return;
+          const now = this.ctx.currentTime;
+          if (now - this.lastScrapeTime < 0.18) return;
+          this.lastScrapeTime = now;
+
+          try {
+            const bufferSize = Math.floor(this.ctx.sampleRate * 0.09);
+            const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+              data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+            }
+
+            const noise = this.ctx.createBufferSource();
+            noise.buffer = buffer;
+
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = 'bandpass';
+            filter.frequency.setValueAtTime(2600, now);
+            filter.Q.setValueAtTime(2.5, now);
+
+            const gain = this.ctx.createGain();
+            gain.gain.setValueAtTime(0.06, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+            noise.connect(filter);
+            filter.connect(gain);
+            gain.connect(this.ctx.destination);
+            noise.start(now);
+          } catch (e) {}
+        }
+
+        // Arena goal horn
+        playGoalHorn(isPlayerGoal = true) {
+          if (this.muted || !this.ctx) return;
+          try {
+            const now = this.ctx.currentTime;
+            const freqs = isPlayerGoal ? [130.81, 164.81, 196.0] : [110.0, 138.59, 164.81];
+            freqs.forEach((f) => {
+              const osc = this.ctx.createOscillator();
+              const gain = this.ctx.createGain();
+              osc.type = 'sawtooth';
+              osc.frequency.setValueAtTime(f, now);
+              osc.frequency.linearRampToValueAtTime(f * 0.985, now + 0.75);
+
+              gain.gain.setValueAtTime(0.001, now);
+              gain.gain.linearRampToValueAtTime(0.11, now + 0.05);
+              gain.gain.setValueAtTime(0.11, now + 0.55);
+              gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+
+              osc.connect(gain);
+              gain.connect(this.ctx.destination);
+              osc.start(now);
+              osc.stop(now + 0.82);
+            });
+          } catch (e) {}
+        }
+      }
+
+      const sound = new SoundEngine();
+
+      // ==========================================
+      // 2. LOGICAL RINK DIMENSIONS & CONSTANTS
+      // ==========================================
+      // Fixed logical 1600x900 coordinate system ensures deterministic physics across any window size
+      const W = 1600;
+      const H = 900;
+      const RINK_PAD = 36;
+      const RINK_LEFT = RINK_PAD;
+      const RINK_RIGHT = W - RINK_PAD;
+      const RINK_TOP = RINK_PAD;
+      const RINK_BOTTOM = H - RINK_PAD;
+      const CORNER_RADIUS = 190;
+      const GOAL_HEIGHT = 240;
+      const GOAL_TOP = (H - GOAL_HEIGHT) / 2;
+      const GOAL_BOTTOM = (H + GOAL_HEIGHT) / 2;
+      const GOAL_DEPTH = 48;
+
+      const PUCK_RADIUS = 22;
+      const STRIKER_RADIUS = 38;
+      const MAX_PUCK_SPEED = 1850;
+      const ICE_FRICTION = 0.992; // Subtle realistic ice glide
+
+      // AI Tuning Profiles
+      const AI_PROFILES = {
+        rookie: {
+          label: 'CPU (Rookie)',
+          maxSpeed: 540,
+          accel: 2400,
+          reactionError: 48,
+          aggression: 0.42,
+          dashChance: 0.015
+        },
+        pro: {
+          label: 'CPU (Pro)',
+          maxSpeed: 840,
+          accel: 4200,
+          reactionError: 18,
+          aggression: 0.68,
+          dashChance: 0.06
+        },
+        allstar: {
+          label: 'CPU (All-Star)',
+          maxSpeed: 1140,
+          accel: 6500,
+          reactionError: 4,
+          aggression: 0.88,
+          dashChance: 0.14
+        }
+      };
+
+      // ==========================================
+      // 3. GAME STATE & ENTITIES
+      // ==========================================
+      const canvas = document.getElementById('hockeyCanvas');
+      const ctx = canvas.getContext('2d', { alpha: false });
+
+      // Pre-render static ice rink background onto an offscreen canvas for peak 60FPS performance
+      const rinkBgCanvas = document.createElement('canvas');
+      rinkBgCanvas.width = W;
+      rinkBgCanvas.height = H;
+      const bgCtx = rinkBgCanvas.getContext('2d');
+
+      const state = {
+        running: false,
+        paused: false,
+        gameOver: false,
+        goalPauseTimer: 0,
+        controlMode: 'mouse', // 'mouse' | 'keyboard'
+        difficulty: 'pro',    // 'rookie' | 'pro' | 'allstar'
+        matchMode: 'first7',  // 'first7' | 'timed'
+        timeRemaining: 120,   // Seconds for timed mode
+        playerScore: 0,
+        aiScore: 0,
+        shakeTime: 0,
+        shakeIntensity: 0
+      };
+
+      const player = {
+        x: W * 0.25,
+        y: H * 0.5,
+        vx: 0,
+        vy: 0,
+        radius: STRIKER_RADIUS,
+        targetX: W * 0.25,
+        targetY: H * 0.5,
+        pointerActive: false,
+        dashEnergy: 100,
+        dashActiveTimer: 0,
+        dashCooldown: 0,
+        dashDirX: 1,
+        dashDirY: 0,
+        color: '#0284c7',
+        rimColor: '#38bdf8'
+      };
+
+      const ai = {
+        x: W * 0.75,
+        y: H * 0.5,
+        vx: 0,
+        vy: 0,
+        radius: STRIKER_RADIUS,
+        dashActiveTimer: 0,
+        dashCooldown: 0,
+        errorOffsetY: 0,
+        errorTimer: 0,
+        color: '#e11d48',
+        rimColor: '#fb7185'
+      };
+
+      const puck = {
+        x: W * 0.5,
+        y: H * 0.5,
+        vx: 0,
+        vy: 0,
+        radius: PUCK_RADIUS,
+        trail: []
+      };
+
+      // Lightweight object-pooled particle array for ice shavings & sparks
+      const particles = [];
+
+      // ==========================================
+      // 4. PRE-RENDER STATIC RINK MARKINGS
+      // ==========================================
+      function drawRoundedRinkPath(c, x, y, w, h, r) {
+        c.beginPath();
+        c.moveTo(x + r, y);
+        c.lineTo(x + w - r, y);
+        c.quadraticCurveTo(x + w, y, x + w, y + r);
+        c.lineTo(x + w, y + h - r);
+        c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        c.lineTo(x + r, y + h);
+        c.quadraticCurveTo(x, y + h, x, y + h - r);
+        c.lineTo(x, y + r);
+        c.quadraticCurveTo(x, y, x + r, y);
+        c.closePath();
+      }
+
+      function renderStaticRink() {
+        const c = bgCtx;
+        c.clearRect(0, 0, W, H);
+
+        // Arena surround floor
+        c.fillStyle = '#090e17';
+        c.fillRect(0, 0, W, H);
+
+        // Clip to rounded rink interior
+        c.save();
+        drawRoundedRinkPath(c, RINK_LEFT, RINK_TOP, RINK_RIGHT - RINK_LEFT, RINK_BOTTOM - RINK_TOP, CORNER_RADIUS);
+        c.clip();
+
+        // Crisp ice gradient base
+        const iceGrad = c.createRadialGradient(W / 2, H / 2, 120, W / 2, H / 2, W * 0.65);
+        iceGrad.addColorStop(0, '#f4fbff');
+        iceGrad.addColorStop(0.65, '#e4f3fb');
+        iceGrad.addColorStop(1, '#d2e8f5');
+        c.fillStyle = iceGrad;
+        c.fillRect(RINK_LEFT, RINK_TOP, RINK_RIGHT - RINK_LEFT, RINK_BOTTOM - RINK_TOP);
+
+        // Subtle deterministic skate marks on ice for texture
+        c.strokeStyle = 'rgba(148, 197, 224, 0.28)';
+        c.lineWidth = 1.5;
+        for (let i = 0; i < 65; i++) {
+          const sx = RINK_LEFT + 90 + ((i * 217) % (W - 220));
+          const sy = RINK_TOP + 60 + ((i * 139) % (H - 120));
+          c.beginPath();
+          c.arc(sx, sy, 35 + (i % 40), 0.2, 1.45);
+          c.stroke();
+        }
+
+        // Goal lines (red)
+        const goalLineOffset = 135;
+        c.strokeStyle = 'rgba(225, 29, 72, 0.55)';
+        c.lineWidth = 5;
+        c.beginPath();
+        c.moveTo(RINK_LEFT + goalLineOffset, RINK_TOP);
+        c.lineTo(RINK_LEFT + goalLineOffset, RINK_BOTTOM);
+        c.moveTo(RINK_RIGHT - goalLineOffset, RINK_TOP);
+        c.lineTo(RINK_RIGHT - goalLineOffset, RINK_BOTTOM);
+        c.stroke();
+
+        // Blue zone lines
+        c.strokeStyle = 'rgba(2, 132, 199, 0.65)';
+        c.lineWidth = 10;
+        c.beginPath();
+        c.moveTo(W * 0.34, RINK_TOP);
+        c.lineTo(W * 0.34, RINK_BOTTOM);
+        c.moveTo(W * 0.66, RINK_TOP);
+        c.lineTo(W * 0.66, RINK_BOTTOM);
+        c.stroke();
+
+        // Center red line (dashed NHL style)
+        c.save();
+        c.strokeStyle = 'rgba(225, 29, 72, 0.78)';
+        c.lineWidth = 10;
+        c.setLineDash([28, 18]);
+        c.beginPath();
+        c.moveTo(W / 2, RINK_TOP);
+        c.lineTo(W / 2, RINK_BOTTOM);
+        c.stroke();
+        c.restore();
+
+        // Center ice face-off circle & dot
+        c.strokeStyle = 'rgba(2, 132, 199, 0.65)';
+        c.lineWidth = 6;
+        c.beginPath();
+        c.arc(W / 2, H / 2, 135, 0, Math.PI * 2);
+        c.stroke();
+
+        c.fillStyle = '#0284c7';
+        c.beginPath();
+        c.arc(W / 2, H / 2, 14, 0, Math.PI * 2);
+        c.fill();
+
+        // Four zone face-off circles
+        const faceoffSpots = [
+          [W * 0.22, H * 0.27],
+          [W * 0.22, H * 0.73],
+          [W * 0.78, H * 0.27],
+          [W * 0.78, H * 0.73]
+        ];
+        faceoffSpots.forEach(([fx, fy]) => {
+          c.strokeStyle = 'rgba(225, 29, 72, 0.45)';
+          c.lineWidth = 4;
+          c.beginPath();
+          c.arc(fx, fy, 85, 0, Math.PI * 2);
+          c.stroke();
+
+          c.fillStyle = 'rgba(225, 29, 72, 0.65)';
+          c.beginPath();
+          c.arc(fx, fy, 9, 0, Math.PI * 2);
+          c.fill();
+        });
+
+        // Goal creases (blue semi-circles in front of each net)
+        c.fillStyle = 'rgba(56, 189, 248, 0.26)';
+        c.strokeStyle = 'rgba(225, 29, 72, 0.7)';
+        c.lineWidth = 4;
+
+        // Left crease
+        c.beginPath();
+        c.arc(RINK_LEFT + 10, H / 2, 128, -Math.PI / 2, Math.PI / 2);
+        c.fill();
+        c.stroke();
+
+        // Right crease
+        c.beginPath();
+        c.arc(RINK_RIGHT - 10, H / 2, 128, Math.PI / 2, (Math.PI * 3) / 2);
+        c.fill();
+        c.stroke();
+
+        c.restore();
+
+        // Goal nets recessed into the left & right boards
+        // Left net (Player defends)
+        c.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        c.fillRect(RINK_LEFT - GOAL_DEPTH + 6, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT);
+        c.strokeStyle = '#38bdf8';
+        c.lineWidth = 5;
+        c.strokeRect(RINK_LEFT - GOAL_DEPTH + 6, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT);
+
+        // Right net (AI defends)
+        c.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        c.fillRect(RINK_RIGHT - 6, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT);
+        c.strokeStyle = '#fb7185';
+        c.lineWidth = 5;
+        c.strokeRect(RINK_RIGHT - 6, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT);
+
+        // Outer dasher boards with yellow kickplate trim
+        c.save();
+        drawRoundedRinkPath(c, RINK_LEFT, RINK_TOP, RINK_RIGHT - RINK_LEFT, RINK_BOTTOM - RINK_TOP, CORNER_RADIUS);
+        c.strokeStyle = '#facc15';
+        c.lineWidth = 14;
+        c.stroke();
+
+        c.strokeStyle = '#1e293b';
+        c.lineWidth = 6;
+        c.stroke();
+        c.restore();
+
+        // Clear board stroke over the two goal mouths so nets look recessed
+        c.fillStyle = '#0f172a';
+        c.fillRect(RINK_LEFT - 12, GOAL_TOP + 4, 22, GOAL_HEIGHT - 8);
+        c.fillRect(RINK_RIGHT - 10, GOAL_TOP + 4, 22, GOAL_HEIGHT - 8);
+
+        // Goal posts (metallic red circles)
+        const posts = [
+          [RINK_LEFT + 4, GOAL_TOP],
+          [RINK_LEFT + 4, GOAL_BOTTOM],
+          [RINK_RIGHT - 4, GOAL_TOP],
+          [RINK_RIGHT - 4, GOAL_BOTTOM]
+        ];
+        posts.forEach(([px, py]) => {
+          c.fillStyle = '#e11d48';
+          c.beginPath();
+          c.arc(px, py, 10, 0, Math.PI * 2);
+          c.fill();
+          c.strokeStyle = '#ffffff';
+          c.lineWidth = 2.5;
+          c.stroke();
+        });
+      }
+
+      // ==========================================
+      // 5. INPUT HANDLING (MOUSE & KEYBOARD)
+      // ==========================================
+      const keys = {};
+
+      window.addEventListener('keydown', (e) => {
+        keys[e.code] = true;
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+          e.preventDefault();
+        }
+        if (e.code === 'Space') {
+          sound.init();
+          triggerPlayerDash();
+        } else if (e.code === 'KeyP') {
+          togglePause();
+        }
+      });
+
+      window.addEventListener('keyup', (e) => {
+        keys[e.code] = false;
+      });
+
+      function resetPositions(puckDirection = 0) {
+        player.x = W * 0.24;
+        player.y = H * 0.5;
+        player.vx = 0;
+        player.vy = 0;
+        player.targetX = player.x;
+        player.targetY = player.y;
+        player.dashActiveTimer = 0;
+
+        ai.x = W * 0.76;
+        ai.y = H * 0.5;
+        ai.vx = 0;
+        ai.vy = 0;
+        ai.dashActiveTimer = 0;
+
+        puck.x = W * 0.5;
+        puck.y = H * 0.5;
+        puck.trail = [];
+
+        if (puckDirection === 0) {
+          puck.vx = 0;
+          puck.vy = 0;
+        } else {
+          // Gentle face-off drop toward the team that just conceded
+          const angle = (Math.random() - 0.5) * 0.9;
+          const speed = 340;
+          puck.vx = Math.cos(angle) * speed * puckDirection;
+          puck.vy = Math.sin(angle) * speed;
+        }
+      }
+
+      function triggerPlayerDash() {
+        if (!state.running || state.paused || state.goalPauseTimer > 0) return;
+        if (player.dashCooldown <= 0 && player.dashEnergy >= 35) {
+          // Compute crisp directional burst vector toward cursor or active movement
+          let dirX = 1;
+          let dirY = 0;
+
+          if (state.controlMode === 'mouse') {
+            const dx = player.targetX - player.x;
+            const dy = player.targetY - player.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > 6) {
+              dirX = dx / dist;
+              dirY = dy / dist;
+            } else {
+              const spd = Math.hypot(player.vx, player.vy);
+              if (spd > 40) {
+                dirX = player.vx / spd;
+                dirY = player.vy / spd;
+              }
+            }
+          } else {
+            let ix = 0;
+            let iy = 0;
+            if (keys['KeyW'] || keys['ArrowUp']) iy -= 1;
+            if (keys['KeyS'] || keys['ArrowDown']) iy += 1;
+            if (keys['KeyA'] || keys['ArrowLeft']) ix -= 1;
+            if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
+            const len = Math.hypot(ix, iy);
+            if (len > 0) {
+              dirX = ix / len;
+              dirY = iy / len;
+            }
+          }
+
+          player.dashDirX = dirX;
+          player.dashDirY = dirY;
+          player.dashActiveTimer = 0.16;
+          player.dashCooldown = 0.42;
+          player.dashEnergy = Math.max(0, player.dashEnergy - 38);
+          sound.playDash();
+          sound.playIceScrape();
+          spawnSparks(player.x, player.y, '#38bdf8', 12, 0.85);
+        }
+      }
+
+      function screenToLogical(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) {
+          return { x: player.targetX, y: player.targetY };
+        }
+        const scaleX = W / rect.width;
+        const scaleY = H / rect.height;
+        return {
+          x: Math.max(0, Math.min(W, (clientX - rect.left) * scaleX)),
+          y: Math.max(0, Math.min(H, (clientY - rect.top) * scaleY))
+        };
+      }
+
+      function syncPointerPosition(clientX, clientY) {
+        const pos = screenToLogical(clientX, clientY);
+        player.targetX = pos.x;
+        player.targetY = pos.y;
+        player.pointerActive = true;
+      }
+
+      // Unified Pointer Events for sub-frame precision and zero double-firing
+      if (window.PointerEvent) {
+        canvas.addEventListener('pointermove', (e) => {
+          if (state.controlMode !== 'mouse') return;
+          syncPointerPosition(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('pointerdown', (e) => {
+          sound.init();
+          if (state.controlMode !== 'mouse') return;
+          syncPointerPosition(e.clientX, e.clientY);
+          if (e.button === 0) {
+            triggerPlayerDash();
+          }
+        });
+
+        canvas.addEventListener('pointerleave', () => {
+          player.pointerActive = false;
+        });
+      } else {
+        canvas.addEventListener('mousemove', (e) => {
+          if (state.controlMode !== 'mouse') return;
+          syncPointerPosition(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+          sound.init();
+          if (e.button === 0 && state.controlMode === 'mouse') {
+            syncPointerPosition(e.clientX, e.clientY);
+            triggerPlayerDash();
+          }
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+          player.pointerActive = false;
+        });
+      }
+
+      // Touch support for hybrid laptops / tablets
+      canvas.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        if (e.touches.length > 0) {
+          syncPointerPosition(e.touches[0].clientX, e.touches[0].clientY);
+        }
+      }, { passive: false });
+
+      canvas.addEventListener('touchstart', (e) => {
+        sound.init();
+        if (e.touches.length > 0) {
+          syncPointerPosition(e.touches[0].clientX, e.touches[0].clientY);
+        }
+        if (e.touches.length === 2) {
+          triggerPlayerDash();
+        }
+      }, { passive: false });
+
+      // ==========================================
+      // 6. PHYSICS, COLLISIONS & AI LOGIC
+      // ==========================================
+      function spawnSparks(x, y, color, count = 10, speedScale = 1) {
+        for (let i = 0; i < count; i++) {
+          if (particles.length > 90) particles.shift();
+          const angle = Math.random() * Math.PI * 2;
+          const speed = (120 + Math.random() * 340) * speedScale;
+          particles.push({
+            x,
+            y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 1,
+            decay: 2.6 + Math.random() * 1.8,
+            size: 2.5 + Math.random() * 3,
+            color
+          });
+        }
+      }
+
+      function clampStrikerToHalf(striker, isLeftHalf) {
+        const r = striker.radius;
+        const minX = isLeftHalf ? RINK_LEFT + r + 8 : W * 0.5 + r;
+        const maxX = isLeftHalf ? W * 0.5 - r : RINK_RIGHT - r - 8;
+        const minY = RINK_TOP + r + 8;
+        const maxY = RINK_BOTTOM - r - 8;
+
+        if (striker.x < minX) { striker.x = minX; striker.vx = 0; }
+        if (striker.x > maxX) { striker.x = maxX; striker.vx = 0; }
+        if (striker.y < minY) { striker.y = minY; striker.vy = 0; }
+        if (striker.y > maxY) { striker.y = maxY; striker.vy = 0; }
+
+        // Keep striker inside rounded corner arcs
+        const corners = isLeftHalf
+          ? [
+              [RINK_LEFT + CORNER_RADIUS, RINK_TOP + CORNER_RADIUS],
+              [RINK_LEFT + CORNER_RADIUS, RINK_BOTTOM - CORNER_RADIUS]
+            ]
+          : [
+              [RINK_RIGHT - CORNER_RADIUS, RINK_TOP + CORNER_RADIUS],
+              [RINK_RIGHT - CORNER_RADIUS, RINK_BOTTOM - CORNER_RADIUS]
+            ];
+
+        for (const [cx, cy] of corners) {
+          const inCornerX = isLeftHalf ? striker.x < cx : striker.x > cx;
+          const inCornerY = cy < H / 2 ? striker.y < cy : striker.y > cy;
+          if (inCornerX && inCornerY) {
+            const dx = striker.x - cx;
+            const dy = striker.y - cy;
+            const dist = Math.hypot(dx, dy);
+            const maxDist = CORNER_RADIUS - r - 6;
+            if (dist > maxDist && dist > 0) {
+              striker.x = cx + (dx / dist) * maxDist;
+              striker.y = cy + (dy / dist) * maxDist;
+            }
+          }
+        }
+      }
+
+      function updatePlayer(dt) {
+        // Regenerate dash energy
+        player.dashEnergy = Math.min(100, player.dashEnergy + 28 * dt);
+        if (player.dashActiveTimer > 0) player.dashActiveTimer -= dt;
+        if (player.dashCooldown > 0) player.dashCooldown -= dt;
+
+        const safeDt = Math.max(dt, 0.001);
+        const prevX = player.x;
+        const prevY = player.y;
+
+        if (state.controlMode === 'mouse') {
+          if (player.dashActiveTimer > 0) {
+            // Crisp directional Slapshot Dash burst
+            const dashSpeed = 1780;
+            player.x += player.dashDirX * dashSpeed * dt;
+            player.y += player.dashDirY * dashSpeed * dt;
+            // Blend target gently so handoff back to cursor is seamless
+            player.targetX += player.dashDirX * dashSpeed * dt * 0.35;
+            player.targetY += player.dashDirY * dashSpeed * dt * 0.35;
+          } else {
+            // 1:1 Direct-to-Cursor critically damped ice-glide tracking
+            const dx = player.targetX - player.x;
+            const dy = player.targetY - player.y;
+            const dist = Math.hypot(dx, dy);
+
+            if (dist > 0.05) {
+              // High stiffness gives near-instant 1:1 tracking while filtering micro-jitter
+              const stiffness = 46;
+              const alpha = 1 - Math.exp(-stiffness * dt);
+              let stepX = dx * alpha;
+              let stepY = dy * alpha;
+
+              // Cap peak frame step at a generous athletic top speed (2600 px/s)
+              const maxStep = 2600 * dt;
+              const stepDist = Math.hypot(stepX, stepY);
+              if (stepDist > maxStep) {
+                const scale = maxStep / stepDist;
+                stepX *= scale;
+                stepY *= scale;
+              }
+
+              player.x += stepX;
+              player.y += stepY;
+            } else {
+              player.x = player.targetX;
+              player.y = player.targetY;
+            }
+          }
+        } else {
+          // Keyboard WASD / Arrow keys
+          let ix = 0;
+          let iy = 0;
+          if (keys['KeyW'] || keys['ArrowUp']) iy -= 1;
+          if (keys['KeyS'] || keys['ArrowDown']) iy += 1;
+          if (keys['KeyA'] || keys['ArrowLeft']) ix -= 1;
+          if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
+
+          if (ix !== 0 && iy !== 0) {
+            const inv = 1 / Math.SQRT2;
+            ix *= inv;
+            iy *= inv;
+          }
+
+          if (player.dashActiveTimer > 0) {
+            player.x += player.dashDirX * 1580 * dt;
+            player.y += player.dashDirY * 1580 * dt;
+          } else {
+            player.x += ix * 960 * dt;
+            player.y += iy * 960 * dt;
+          }
+        }
+
+        clampStrikerToHalf(player, true);
+
+        // Compute true physical frame-to-frame velocity for crisp flick momentum
+        const rawVx = (player.x - prevX) / safeDt;
+        const rawVy = (player.y - prevY) / safeDt;
+        // Light temporal smoothing on velocity prevents spike artifacts on high-DPI mice
+        const velBlend = 1 - Math.exp(-38 * dt);
+        player.vx += (rawVx - player.vx) * velBlend;
+        player.vy += (rawVy - player.vy) * velBlend;
+      }
+
+      function updateAI(dt) {
+        const profile = AI_PROFILES[state.difficulty];
+        if (ai.dashActiveTimer > 0) ai.dashActiveTimer -= dt;
+        if (ai.dashCooldown > 0) ai.dashCooldown -= dt;
+
+        // Periodic slight reaction variance so AI feels organic
+        ai.errorTimer -= dt;
+        if (ai.errorTimer <= 0) {
+          ai.errorTimer = 0.25 + Math.random() * 0.35;
+          ai.errorOffsetY = (Math.random() * 2 - 1) * profile.reactionError;
+        }
+
+        let desiredX = W * 0.82;
+        let desiredY = H * 0.5 + ai.errorOffsetY;
+
+        const puckInAiZone = puck.x > W * 0.48;
+        const puckApproaching = puck.vx > 80;
+
+        if (puckInAiZone) {
+          // Attack or clear the puck
+          const behindPuckX = Math.min(RINK_RIGHT - ai.radius - 28, puck.x + 34);
+          if (puck.x > ai.x - 10) {
+            // Puck got behind AI: loop around safely without own-goaling
+            desiredX = Math.min(RINK_RIGHT - ai.radius - 20, puck.x + 65);
+            desiredY = puck.y < H / 2 ? puck.y + 85 : puck.y - 85;
+          } else {
+            desiredX = behindPuckX;
+            desiredY = puck.y + ai.errorOffsetY * 0.4;
+
+            // Trigger AI slapshot dash when lined up for a shot
+            const distToPuck = Math.hypot(puck.x - ai.x, puck.y - ai.y);
+            if (distToPuck < 155 && ai.dashCooldown <= 0 && Math.random() < profile.dashChance) {
+              ai.dashActiveTimer = 0.14;
+              ai.dashCooldown = 1.1;
+            }
+          }
+        } else if (puckApproaching) {
+          // Predict puck arrival Y at defensive line
+          const defX = W * (0.86 - profile.aggression * 0.14);
+          const timeToReach = Math.max(0, (defX - puck.x) / Math.max(120, puck.vx));
+          let predictedY = puck.y + puck.vy * timeToReach;
+          // Reflect prediction off top/bottom boards
+          if (predictedY < RINK_TOP + 50) predictedY = RINK_TOP + 50 + (RINK_TOP + 50 - predictedY);
+          if (predictedY > RINK_BOTTOM - 50) predictedY = RINK_BOTTOM - 50 - (predictedY - (RINK_BOTTOM - 50));
+
+          desiredX = defX;
+          desiredY = Math.max(GOAL_TOP - 40, Math.min(GOAL_BOTTOM + 40, predictedY + ai.errorOffsetY));
+        } else {
+          // Guard the slot while puck is in player's end
+          desiredX = W * 0.84;
+          desiredY = H * 0.5 + (puck.y - H * 0.5) * 0.38 + ai.errorOffsetY * 0.5;
+        }
+
+        const dx = desiredX - ai.x;
+        const dy = desiredY - ai.y;
+        const dist = Math.hypot(dx, dy);
+        const topSpeed = ai.dashActiveTimer > 0 ? profile.maxSpeed * 1.65 : profile.maxSpeed;
+
+        if (dist > 4) {
+          const targetVx = (dx / dist) * Math.min(topSpeed, dist * 7.5);
+          const targetVy = (dy / dist) * Math.min(topSpeed, dist * 7.5);
+          const accelStep = profile.accel * dt;
+          ai.vx += Math.max(-accelStep, Math.min(accelStep, targetVx - ai.vx));
+          ai.vy += Math.max(-accelStep, Math.min(accelStep, targetVy - ai.vy));
+        } else {
+          ai.vx *= 0.8;
+          ai.vy *= 0.8;
+        }
+
+        ai.x += ai.vx * dt;
+        ai.y += ai.vy * dt;
+        clampStrikerToHalf(ai, false);
+      }
+
+      function resolveStrikerPuckCollision(striker, isPlayer) {
+        const dx = puck.x - striker.x;
+        const dy = puck.y - striker.y;
+        const dist = Math.hypot(dx, dy);
+        const minDist = striker.radius + puck.radius;
+
+        if (dist < minDist && dist > 0.0001) {
+          const nx = dx / dist;
+          const ny = dy / dist;
+
+          // Separate overlapping circles cleanly
+          const overlap = minDist - dist;
+          puck.x += nx * (overlap + 1);
+          puck.y += ny * (overlap + 1);
+
+          // Relative velocity along collision normal
+          const rvx = puck.vx - striker.vx;
+          const rvy = puck.vy - striker.vy;
+          const velAlongNormal = rvx * nx + rvy * ny;
+
+          if (velAlongNormal < 0) {
+            const restitution = 0.88;
+            const impulse = -(1 + restitution) * velAlongNormal;
+            puck.vx += impulse * nx;
+            puck.vy += impulse * ny;
+          }
+
+          // Transfer striker momentum + slapshot dash power
+          const dashBoost = striker.dashActiveTimer > 0 ? 1.45 : 1.05;
+          puck.vx += striker.vx * 0.52 * dashBoost;
+          puck.vy += striker.vy * 0.52 * dashBoost;
+
+          // Guarantee minimum crisp rebound speed on active hit
+          const newSpeed = Math.hypot(puck.vx, puck.vy);
+          const minHitSpeed = striker.dashActiveTimer > 0 ? 1180 : 540;
+          if (newSpeed < minHitSpeed) {
+            puck.vx = nx * minHitSpeed;
+            puck.vy = ny * minHitSpeed;
+          } else if (newSpeed > MAX_PUCK_SPEED) {
+            puck.vx = (puck.vx / newSpeed) * MAX_PUCK_SPEED;
+            puck.vy = (puck.vy / newSpeed) * MAX_PUCK_SPEED;
+          }
+
+          const finalSpeed = Math.hypot(puck.vx, puck.vy);
+          const intensity = finalSpeed / MAX_PUCK_SPEED;
+          sound.playPuckHit(intensity);
+          spawnSparks(
+            puck.x - nx * puck.radius,
+            puck.y - ny * puck.radius,
+            isPlayer ? '#38bdf8' : '#fb7185',
+            striker.dashActiveTimer > 0 ? 16 : 9,
+            0.7 + intensity * 0.7
+          );
+
+          if (striker.dashActiveTimer > 0) {
+            triggerScreenShake(0.12, 7);
+          }
+        }
+      }
+
+      function updatePuck(dt) {
+        // Store short motion trail for visual clarity at high speeds
+        puck.trail.push({ x: puck.x, y: puck.y });
+        if (puck.trail.length > 9) puck.trail.shift();
+
+        // Sub-step puck movement (2 sub-steps) to prevent tunneling on fast slapshots
+        const subSteps = 2;
+        const subDt = dt / subSteps;
+
+        for (let s = 0; s < subSteps; s++) {
+          puck.x += puck.vx * subDt;
+          puck.y += puck.vy * subDt;
+
+          // Check Goal Posts first (physical round posts!)
+          const posts = [
+            [RINK_LEFT + 4, GOAL_TOP],
+            [RINK_LEFT + 4, GOAL_BOTTOM],
+            [RINK_RIGHT - 4, GOAL_TOP],
+            [RINK_RIGHT - 4, GOAL_BOTTOM]
+          ];
+          for (const [px, py] of posts) {
+            const dx = puck.x - px;
+            const dy = puck.y - py;
+            const dist = Math.hypot(dx, dy);
+            const minPostDist = puck.radius + 9;
+            if (dist < minPostDist && dist > 0) {
+              const nx = dx / dist;
+              const ny = dy / dist;
+              puck.x = px + nx * (minPostDist + 1);
+              puck.y = py + ny * (minPostDist + 1);
+              const dot = puck.vx * nx + puck.vy * ny;
+              if (dot < 0) {
+                puck.vx = (puck.vx - 2 * dot * nx) * 0.88;
+                puck.vy = (puck.vy - 2 * dot * ny) * 0.88;
+                sound.playPostClang();
+                spawnSparks(px, py, '#fde047', 14, 0.9);
+                triggerScreenShake(0.1, 5);
+              }
+            }
+          }
+
+          // Check Goal Scoring (puck crosses goal line inside goal mouth)
+          const inGoalY = puck.y > GOAL_TOP + 8 && puck.y < GOAL_BOTTOM - 8;
+          if (inGoalY) {
+            if (puck.x - puck.radius < RINK_LEFT - 14) {
+              handleGoalScored(false); // AI scored
+              return;
+            }
+            if (puck.x + puck.radius > RINK_RIGHT + 14) {
+              handleGoalScored(true); // Player scored
+              return;
+            }
+          }
+
+          // Top and Bottom straight boards
+          if (puck.y - puck.radius < RINK_TOP + 6) {
+            puck.y = RINK_TOP + 6 + puck.radius;
+            if (puck.vy < 0) {
+              puck.vy = -puck.vy * 0.86;
+              sound.playBoardBounce(Math.abs(puck.vy) / MAX_PUCK_SPEED);
+              spawnSparks(puck.x, RINK_TOP + 6, '#e2f1f8', 5, 0.45);
+            }
+          } else if (puck.y + puck.radius > RINK_BOTTOM - 6) {
+            puck.y = RINK_BOTTOM - 6 - puck.radius;
+            if (puck.vy > 0) {
+              puck.vy = -puck.vy * 0.86;
+              sound.playBoardBounce(Math.abs(puck.vy) / MAX_PUCK_SPEED);
+              spawnSparks(puck.x, RINK_BOTTOM - 6, '#e2f1f8', 5, 0.45);
+            }
+          }
+
+          // Left and Right straight boards (outside goal opening)
+          if (!inGoalY) {
+            if (puck.x - puck.radius < RINK_LEFT + 6) {
+              puck.x = RINK_LEFT + 6 + puck.radius;
+              if (puck.vx < 0) {
+                puck.vx = -puck.vx * 0.86;
+                sound.playBoardBounce(Math.abs(puck.vx) / MAX_PUCK_SPEED);
+                spawnSparks(RINK_LEFT + 6, puck.y, '#e2f1f8', 5, 0.45);
+              }
+            } else if (puck.x + puck.radius > RINK_RIGHT - 6) {
+              puck.x = RINK_RIGHT - 6 - puck.radius;
+              if (puck.vx > 0) {
+                puck.vx = -puck.vx * 0.86;
+                sound.playBoardBounce(Math.abs(puck.vx) / MAX_PUCK_SPEED);
+                spawnSparks(RINK_RIGHT - 6, puck.y, '#e2f1f8', 5, 0.45);
+              }
+            }
+          }
+
+          // Rounded Rink Corners (smooth authentic ice hockey wrap-around bounces!)
+          const cornerCenters = [
+            [RINK_LEFT + CORNER_RADIUS, RINK_TOP + CORNER_RADIUS, true, true],
+            [RINK_RIGHT - CORNER_RADIUS, RINK_TOP + CORNER_RADIUS, false, true],
+            [RINK_LEFT + CORNER_RADIUS, RINK_BOTTOM - CORNER_RADIUS, true, false],
+            [RINK_RIGHT - CORNER_RADIUS, RINK_BOTTOM - CORNER_RADIUS, false, false]
+          ];
+
+          for (const [cx, cy, isLeft, isTop] of cornerCenters) {
+            const inX = isLeft ? puck.x < cx : puck.x > cx;
+            const inY = isTop ? puck.y < cy : puck.y > cy;
+            if (inX && inY) {
+              const dx = puck.x - cx;
+              const dy = puck.y - cy;
+              const dist = Math.hypot(dx, dy);
+              const maxAllowed = CORNER_RADIUS - puck.radius - 6;
+              if (dist > maxAllowed && dist > 0) {
+                const nx = dx / dist;
+                const ny = dy / dist;
+                puck.x = cx + nx * maxAllowed;
+                puck.y = cy + ny * maxAllowed;
+
+                const dot = puck.vx * nx + puck.vy * ny;
+                if (dot > 0) {
+                  puck.vx = (puck.vx - 2 * dot * nx) * 0.88;
+                  puck.vy = (puck.vy - 2 * dot * ny) * 0.88;
+                  sound.playBoardBounce(Math.hypot(puck.vx, puck.vy) / MAX_PUCK_SPEED);
+                }
+              }
+            }
+          }
+        }
+
+        // Apply realistic ice glide friction
+        const frictionFactor = Math.pow(ICE_FRICTION, dt * 60);
+        puck.vx *= frictionFactor;
+        puck.vy *= frictionFactor;
+
+        if (Math.hypot(puck.vx, puck.vy) < 6) {
+          puck.vx = 0;
+          puck.vy = 0;
+        }
+      }
+
+      function updateParticles(dt) {
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.vx *= 0.94;
+          p.vy *= 0.94;
+          p.life -= p.decay * dt;
+          if (p.life <= 0) {
+            particles.splice(i, 1);
+          }
+        }
+      }
+
+      // ==========================================
+      // 7. MATCH FLOW, GOALS & UI UPDATES
+      // ==========================================
+      function triggerScreenShake(duration, intensity) {
+        state.shakeTime = duration;
+        state.shakeIntensity = intensity;
+      }
+
+      function showBanner(title, subtitle, durationMs = 1500) {
+        const banner = document.getElementById('banner-overlay');
+        document.getElementById('banner-title').textContent = title;
+        document.getElementById('banner-sub').textContent = subtitle;
+        banner.classList.remove('opacity-0');
+        banner.classList.add('opacity-100');
+
+        clearTimeout(banner._hideTimer);
+        banner._hideTimer = setTimeout(() => {
+          banner.classList.remove('opacity-100');
+          banner.classList.add('opacity-0');
+        }, durationMs);
+      }
+
+      function triggerFlash(color) {
+        const flash = document.getElementById('flash-overlay');
+        flash.style.backgroundColor = color;
+        flash.classList.remove('goal-flash');
+        void flash.offsetWidth; // Force reflow
+        flash.classList.add('goal-flash');
+      }
+
+      function handleGoalScored(playerScored) {
+        sound.playGoalHorn(playerScored);
+        triggerScreenShake(0.32, 13);
+        spawnSparks(puck.x, puck.y, playerScored ? '#38bdf8' : '#f43f5e', 34, 1.3);
+
+        if (playerScored) {
+          state.playerScore++;
+          triggerFlash('rgba(56, 189, 248, 0.45)');
+          showBanner('GOAL!', 'YOU SCORED!', 1450);
+        } else {
+          state.aiScore++;
+          triggerFlash('rgba(244, 63, 94, 0.45)');
+          showBanner('CPU GOAL!', 'DEFEND THE CREASE!', 1450);
+        }
+
+        updateHUD();
+
+        // Check First-to-7 Victory Condition
+        if (state.matchMode === 'first7' && (state.playerScore >= 7 || state.aiScore >= 7)) {
+          endMatch();
+          return;
+        }
+
+        // Brief celebration pause before next face-off
+        state.goalPauseTimer = 1.45;
+        state.nextFaceoffDir = playerScored ? 1 : -1;
+      }
+
+      function endMatch() {
+        state.running = false;
+        state.gameOver = true;
+        const modal = document.getElementById('menu-overlay');
+        const title = document.getElementById('modal-title');
+        const sub = document.getElementById('modal-subtitle');
+        const startBtn = document.getElementById('start-btn');
+
+        if (state.playerScore > state.aiScore) {
+          title.textContent = 'VICTORY!';
+          sub.innerHTML = `Final Score: <span class="text-sky-400 font-bold">${state.playerScore}</span> – <span class="text-rose-400 font-bold">${state.aiScore}</span>. You dominated the ice!`;
+        } else if (state.aiScore > state.playerScore) {
+          title.textContent = 'DEFEAT';
+          sub.innerHTML = `Final Score: <span class="text-sky-400 font-bold">${state.playerScore}</span> – <span class="text-rose-400 font-bold">${state.aiScore}</span>. Hit the ice for a rematch!`;
+        } else {
+          title.textContent = 'OVERTIME DRAW!';
+          sub.innerHTML = `Tied at <span class="text-amber-400 font-bold">${state.playerScore} – ${state.aiScore}</span> when the buzzer sounded!`;
+        }
+
+        startBtn.textContent = 'PLAY AGAIN';
+        modal.classList.remove('hidden');
+      }
+
+      function startNewMatch() {
+        sound.init();
+        state.playerScore = 0;
+        state.aiScore = 0;
+        state.timeRemaining = 120;
+        state.gameOver = false;
+        state.paused = false;
+        state.goalPauseTimer = 0;
+        state.running = true;
+        player.dashEnergy = 100;
+
+        resetPositions(Math.random() < 0.5 ? 1 : -1);
+        updateHUD();
+
+        document.getElementById('menu-overlay').classList.add('hidden');
+        document.getElementById('pause-btn').textContent = '⏸️ Pause';
+        showBanner('FACE-OFF!', 'FIRST PUCK DROPPED', 1000);
+      }
+
+      function updateHUD() {
+        document.getElementById('player-score').textContent = state.playerScore;
+        document.getElementById('ai-score').textContent = state.aiScore;
+        document.getElementById('ai-label').textContent = AI_PROFILES[state.difficulty].label;
+
+        const modeLabel = document.getElementById('hud-mode-label');
+        const clockEl = document.getElementById('hud-clock');
+
+        if (state.matchMode === 'first7') {
+          modeLabel.textContent = 'FIRST TO 7';
+          clockEl.textContent = `${Math.max(state.playerScore, state.aiScore)} / 7`;
+        } else {
+          modeLabel.textContent = 'TIMED PERIOD';
+          const mins = Math.floor(Math.max(0, state.timeRemaining) / 60);
+          const secs = Math.floor(Math.max(0, state.timeRemaining) % 60);
+          clockEl.textContent = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        }
+      }
+
+      // ==========================================
+      // 8. RENDERING PIPELINE (60 FPS CANVAS)
+      // ==========================================
+      function drawStriker(striker, isPlayer) {
+        ctx.save();
+
+        // Drop shadow on ice
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+        ctx.beginPath();
+        ctx.arc(striker.x + 5, striker.y + 7, striker.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Dash aura glow
+        if (striker.dashActiveTimer > 0) {
+          ctx.strokeStyle = isPlayer ? 'rgba(56, 189, 248, 0.7)' : 'rgba(251, 113, 133, 0.7)';
+          ctx.lineWidth = 8;
+          ctx.beginPath();
+          ctx.arc(striker.x, striker.y, striker.radius + 7, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Outer bumper ring
+        ctx.fillStyle = striker.color;
+        ctx.beginPath();
+        ctx.arc(striker.x, striker.y, striker.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Metallic highlight bevel
+        ctx.strokeStyle = striker.rimColor;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(striker.x, striker.y, striker.radius - 3, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Inner grip handle
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.arc(striker.x, striker.y, striker.radius * 0.44, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = striker.rimColor;
+        ctx.beginPath();
+        ctx.arc(striker.x - 3, striker.y - 3, striker.radius * 0.16, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      function drawPuck() {
+        // Motion trail
+        const speed = Math.hypot(puck.vx, puck.vy);
+        if (speed > 260 && puck.trail.length > 1) {
+          for (let i = 0; i < puck.trail.length; i++) {
+            const pt = puck.trail[i];
+            const ratio = (i + 1) / puck.trail.length;
+            ctx.fillStyle = `rgba(15, 23, 42, ${ratio * 0.22})`;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, puck.radius * (0.55 + ratio * 0.4), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // Puck ice shadow
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+        ctx.beginPath();
+        ctx.arc(puck.x + 4, puck.y + 5, puck.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Vulcanized rubber body
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Subtle rim bevel
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(puck.x, puck.y, puck.radius - 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      function drawParticles() {
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+          ctx.globalAlpha = Math.max(0, p.life);
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function drawMouseReticle() {
+        if (state.controlMode !== 'mouse' || !state.running || state.paused || !player.pointerActive) {
+          return;
+        }
+
+        const tx = player.targetX;
+        const ty = player.targetY;
+        const dist = Math.hypot(tx - player.x, ty - player.y);
+
+        ctx.save();
+
+        // Subtle skate-edge guide tether when flicking across the ice
+        if (dist > 14) {
+          ctx.beginPath();
+          ctx.moveTo(player.x, player.y);
+          ctx.lineTo(tx, ty);
+          ctx.strokeStyle = 'rgba(2, 132, 199, 0.22)';
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([6, 6]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        // Crisp on-ice pointer reticle (replaces hidden system cursor cleanly)
+        ctx.beginPath();
+        ctx.arc(tx, ty, 9, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(2, 132, 199, 0.72)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(tx, ty, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#0284c7';
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      function render() {
+        ctx.save();
+
+        // Screen shake on hard slapshots or goals
+        if (state.shakeTime > 0) {
+          const sx = (Math.random() * 2 - 1) * state.shakeIntensity;
+          const sy = (Math.random() * 2 - 1) * state.shakeIntensity;
+          ctx.translate(sx, sy);
+        }
+
+        // Blit pre-rendered ice rink in a single GPU-accelerated drawImage call
+        ctx.drawImage(rinkBgCanvas, 0, 0);
+
+        // Draw dynamic entities
+        drawMouseReticle();
+        drawPuck();
+        drawStriker(player, true);
+        drawStriker(ai, false);
+        drawParticles();
+
+        ctx.restore();
+      }
+
+      // ==========================================
+      // 9. MAIN FIXED-TIMESTEP GAME LOOP
+      // ==========================================
+      let lastTimestamp = 0;
+
+      function gameLoop(timestamp) {
+        if (!lastTimestamp) lastTimestamp = timestamp;
+        // Clamp delta-time to max 0.05s so tab-switching never causes physics explosions
+        const dt = Math.min(0.05, (timestamp - lastTimestamp) / 1000);
+        lastTimestamp = timestamp;
+
+        if (state.shakeTime > 0) {
+          state.shakeTime = Math.max(0, state.shakeTime - dt);
+        }
+
+        if (state.running && !state.paused) {
+          if (state.goalPauseTimer > 0) {
+            state.goalPauseTimer -= dt;
+            updateParticles(dt);
+            if (state.goalPauseTimer <= 0) {
+              resetPositions(state.nextFaceoffDir || 1);
+            }
+          } else {
+            // Timed mode countdown
+            if (state.matchMode === 'timed') {
+              state.timeRemaining -= dt;
+              updateHUD();
+              if (state.timeRemaining <= 0) {
+                state.timeRemaining = 0;
+                updateHUD();
+                endMatch();
+              }
+            }
+
+            updatePlayer(dt);
+            updateAI(dt);
+            updatePuck(dt);
+            resolveStrikerPuckCollision(player, true);
+            resolveStrikerPuckCollision(ai, false);
+            updateParticles(dt);
+          }
+
+          // Update dash energy bar smoothly
+          const boostBar = document.getElementById('hud-boost-bar');
+          boostBar.style.width = `${Math.round(player.dashEnergy)}%`;
+          boostBar.style.backgroundColor = player.dashEnergy >= 35 ? '#38bdf8' : '#64748b';
+        }
+
+        render();
+        requestAnimationFrame(gameLoop);
+      }
+
+      // ==========================================
+      // 10. UI EVENT LISTENERS & RESPONSIVE RESIZE
+      // ==========================================
+      function handleResize() {
+        // Keep internal canvas resolution matched cleanly to logical 1600x900
+        canvas.width = W;
+        canvas.height = H;
+      }
+
+      function setDifficulty(diff) {
+        state.difficulty = diff;
+        document.querySelectorAll('.diff-btn, .footer-diff-btn').forEach((btn) => {
+          if (btn.dataset.diff === diff) {
+            btn.classList.add('active-blue');
+          } else {
+            btn.classList.remove('active-blue');
+          }
+        });
+        updateHUD();
+      }
+
+      function setMatchMode(mode) {
+        state.matchMode = mode;
+        document.querySelectorAll('.mode-btn').forEach((btn) => {
+          if (btn.dataset.mode === mode) {
+            btn.classList.add('active-blue');
+          } else {
+            btn.classList.remove('active-blue');
+          }
+        });
+        updateHUD();
+      }
+
+      function setControlMode(mode) {
+        state.controlMode = mode;
+        const mouseBtn = document.getElementById('ctrl-mouse-btn');
+        const kbBtn = document.getElementById('ctrl-kb-btn');
+        if (mode === 'mouse') {
+          mouseBtn.classList.add('active-blue');
+          kbBtn.classList.remove('active-blue');
+          canvas.classList.remove('keyboard-mode');
+        } else {
+          kbBtn.classList.add('active-blue');
+          mouseBtn.classList.remove('active-blue');
+          canvas.classList.add('keyboard-mode');
+        }
+      }
+
+      function togglePause() {
+        if (!state.running) return;
+        state.paused = !state.paused;
+        const btn = document.getElementById('pause-btn');
+        if (state.paused) {
+          btn.textContent = '▶️ Resume';
+          showBanner('PAUSED', 'PRESS P OR RESUME', 60000);
+        } else {
+          // Sync target to current striker position on resume so there is no sudden jump
+          player.targetX = player.x;
+          player.targetY = player.y;
+          btn.textContent = '⏸️ Pause';
+          const banner = document.getElementById('banner-overlay');
+          banner.classList.remove('opacity-100');
+          banner.classList.add('opacity-0');
+        }
+      }
+
+      // Wire up UI Buttons
+      document.getElementById('start-btn').addEventListener('click', (e) => {
+        startNewMatch();
+        if (e.clientX && e.clientY) {
+          syncPointerPosition(e.clientX, e.clientY);
+        }
+      });
+
+      document.querySelectorAll('.diff-btn, .footer-diff-btn').forEach((btn) => {
+        btn.addEventListener('click', () => setDifficulty(btn.dataset.diff));
+      });
+
+      document.querySelectorAll('.mode-btn').forEach((btn) => {
+        btn.addEventListener('click', () => setMatchMode(btn.dataset.mode));
+      });
+
+      document.getElementById('ctrl-mouse-btn').addEventListener('click', () => setControlMode('mouse'));
+      document.getElementById('ctrl-kb-btn').addEventListener('click', () => setControlMode('keyboard'));
+
+      document.getElementById('mute-btn').addEventListener('click', () => {
+        sound.init();
+        const muted = sound.toggleMute();
+        document.getElementById('mute-btn').textContent = muted ? '🔇 Muted' : '🔊 SFX On';
+      });
+
+      document.getElementById('pause-btn').addEventListener('click', togglePause);
+      document.getElementById('reset-btn').addEventListener('click', startNewMatch);
+
+      window.addEventListener('resize', handleResize);
+
+      // Initialize engine on window load
+      window.onload = function () {
+        handleResize();
+        renderStaticRink();
+        resetPositions(0);
+        updateHUD();
+        requestAnimationFrame(gameLoop);
+      };
+    })();
+  </script>
+</body>
+</html>

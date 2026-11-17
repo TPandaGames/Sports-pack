@@ -1,0 +1,5 @@
+{
+  "hud":   { "type": "checkbox", "text": "Show scoreboard", "value": true },
+  "diff":  { "type": "dropdown", "text": "CPU skill", "value": 1, "items": ["rookie", "pro", "allstar"] },
+  "goals": { "type": "slider", "text": "Goals to win", "value": 5, "min": 1, "max": 15, "step": 1 }
+}

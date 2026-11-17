@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arcade Ice Hockey Wallpaper</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #090e17; overflow: hidden; }
+    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: none; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+/**
+ * ARCADE ICE HOCKEY - LIVE WALLPAPER EDITION
+ * CPU vs CPU attract mode. No network, no assets, no input required.
+ * Options (URL query, e.g. index.html?hud=0&diff=allstar&goals=5&fps=30):
+ *   hud=0|1        show scoreboard (default 1)
+ *   diff=rookie|pro|allstar   AI skill for both teams (default pro)
+ *   goals=N        first to N goals, then scores reset (default 5)
+ *   fps=N          frame cap, 15-120 (default 60)
+ */
+(function () {
+  'use strict';
+
+  // Sound is intentionally disabled for a wallpaper; stubs keep the shared physics code unchanged.
+  const sound = {
+    playPuckHit() {}, playBoardBounce() {}, playPostClang() {}, playGoalHorn() {}
+  };
+
+  const W = 1600;
+  const H = 900;
+      const RINK_PAD = 36;
+      const RINK_LEFT = RINK_PAD;
+      const RINK_RIGHT = W - RINK_PAD;
+      const RINK_TOP = RINK_PAD;
+      const RINK_BOTTOM = H - RINK_PAD;
+      const CORNER_RADIUS = 190;
+      const GOAL_HEIGHT = 240;
+      const GOAL_TOP = (H - GOAL_HEIGHT) / 2;
+      const GOAL_BOTTOM = (H + GOAL_HEIGHT) / 2;
+      const GOAL_DEPTH = 48;
+
+      const PUCK_RADIUS = 22;
+      const STRIKER_RADIUS = 38;
+      const MAX_PUCK_SPEED = 1850;
+      const ICE_FRICTION = 0.992; // Subtle realistic ice glide
+      // AI Tuning Profiles
+      const AI_PROFILES = {
+        rookie: {
+          label: 'CPU (Rookie)',
+          maxSpeed: 540,
+          accel: 2400,
+          reactionError: 48,
+          aggression: 0.42,
+          dashChance: 0.015
+        },
+        pro: {
+          label: 'CPU (Pro)',
+          maxSpeed: 840,
+          accel: 4200,
+          reactionError: 18,
+          aggression: 0.68,
+          dashChance: 0.06
+        },
+        allstar: {
+          label: 'CPU (All-Star)',
+          maxSpeed: 1140,
+          accel: 6500,
+          reactionError: 4,
+          aggression: 0.88,
+          dashChance: 0.14
+        }
+      };
+
+  // ---- Options -------------------------------------------------------------
+  const params = new URLSearchParams(location.search);
+  const opts = {
+    hud: params.get('hud') !== '0',
+    diff: AI_PROFILES[params.get('diff')] ? params.get('diff') : 'pro',
+    goals: Math.max(1, parseInt(params.get('goals'), 10) || 5),
+    fps: Math.min(120, Math.max(15, parseInt(params.get('fps'), 10) || 60))
+  };
+
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Pre-rendered static rink (re-rendered at higher resolution on big/HiDPI screens)
+  const rinkBgCanvas = document.createElement('canvas');
+  const bgCtx = rinkBgCanvas.getContext('2d');
+  let view = { scale: 1, ox: 0, oy: 0 };
+
+  const state = {
+    goalPauseTimer: 0,
+    nextFaceoffDir: 1,
+    resetScoresAfterPause: false,
+    leftScore: 0,
+    rightScore: 0,
+    shakeTime: 0,
+    shakeIntensity: 0,
+    banner: null,       // { title, sub, timer }
+    stallTimer: 0
+  };
+
+  // "player" = blue team (left), "ai" = red team (right). Names kept for the shared physics code.
+  const player = {
+    side: -1, x: W * 0.24, y: H * 0.5, vx: 0, vy: 0, radius: STRIKER_RADIUS,
+    dashActiveTimer: 0, dashCooldown: 0, errorOffsetY: 0, errorTimer: 0,
+    color: '#0284c7', rimColor: '#38bdf8'
+  };
+  const ai = {
+    side: 1, x: W * 0.76, y: H * 0.5, vx: 0, vy: 0, radius: STRIKER_RADIUS,
+    dashActiveTimer: 0, dashCooldown: 0, errorOffsetY: 0, errorTimer: 0,
+    color: '#e11d48', rimColor: '#fb7185'
+  };
+  const puck = { x: W * 0.5, y: H * 0.5, vx: 0, vy: 0, radius: PUCK_RADIUS, trail: [] };
+  const particles = [];
+
+  function triggerScreenShake(duration, intensity) {
+    state.shakeTime = duration;
+    state.shakeIntensity = intensity;
+  }
+
+      function drawRoundedRinkPath(c, x, y, w, h, r) {
+        c.beginPath();
+        c.moveTo(x + r, y);
+        c.lineTo(x + w - r, y);
+        c.quadraticCurveTo(x + w, y, x + w, y + r);
+        c.lineTo(x + w, y + h - r);
+        c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        c.lineTo(x + r, y + h);
+        c.quadraticCurveTo(x, y + h, x, y + h - r);
+        c.lineTo(x, y + r);
+        c.quadraticCurveTo(x, y, x + r, y);
+        c.closePath();
+      }
+
+      function renderStaticRink() {
+        const c = bgCtx;
+        c.clearRect(0, 0, W, H);
+
+        // Arena surround floor
+        c.fillStyle = '#090e17';
+        c.fillRect(0, 0, W, H);
+
+        // Clip to rounded rink interior
+        c.save();
+        drawRoundedRinkPath(c, RINK_LEFT, RINK_TOP, RINK_RIGHT - RINK_LEFT, RINK_BOTTOM - RINK_TOP, CORNER_RADIUS);
+        c.clip();
+
+        // Crisp ice gradient base
+        const iceGrad = c.createRadialGradient(W / 2, H / 2, 120, W / 2, H / 2, W * 0.65);
+        iceGrad.addColorStop(0, '#f4fbff');
+        iceGrad.addColorStop(0.65, '#e4f3fb');
+        iceGrad.addColorStop(1, '#d2e8f5');
+        c.fillStyle = iceGrad;
+        c.fillRect(RINK_LEFT, RINK_TOP, RINK_RIGHT - RINK_LEFT, RINK_BOTTOM - RINK_TOP);
+
+        // Subtle deterministic skate marks on ice for texture
+        c.strokeStyle = 'rgba(148, 197, 224, 0.28)';
+        c.lineWidth = 1.5;
+        for (let i = 0; i < 65; i++) {
+          const sx = RINK_LEFT + 90 + ((i * 217) % (W - 220));
+          const sy = RINK_TOP + 60 + ((i * 139) % (H - 120));
+          c.beginPath();
+          c.arc(sx, sy, 35 + (i % 40), 0.2, 1.45);
+          c.stroke();
+        }
+
+        // Goal lines (red)
+        const goalLineOffset = 135;
+        c.strokeStyle = 'rgba(225, 29, 72, 0.55)';
+        c.lineWidth = 5;
+        c.beginPath();
+        c.moveTo(RINK_LEFT + goalLineOffset, RINK_TOP);
+        c.lineTo(RINK_LEFT + goalLineOffset, RINK_BOTTOM);
+        c.moveTo(RINK_RIGHT - goalLineOffset, RINK_TOP);
+        c.lineTo(RINK_RIGHT - goalLineOffset, RINK_BOTTOM);
+        c.stroke();
+
+        // Blue zone lines
+        c.strokeStyle = 'rgba(2, 132, 199, 0.65)';
+        c.lineWidth = 10;
+        c.beginPath();
+        c.moveTo(W * 0.34, RINK_TOP);
+        c.lineTo(W * 0.34, RINK_BOTTOM);
+        c.moveTo(W * 0.66, RINK_TOP);
+        c.lineTo(W * 0.66, RINK_BOTTOM);
+        c.stroke();
+
+        // Center red line (dashed NHL style)
+        c.save();
+        c.strokeStyle = 'rgba(225, 29, 72, 0.78)';
+        c.lineWidth = 10;
+        c.setLineDash([28, 18]);
+        c.beginPath();
+        c.moveTo(W / 2, RINK_TOP);
+        c.lineTo(W / 2, RINK_BOTTOM);
+        c.stroke();
+        c.restore();
+
+        // Center ice face-off circle & dot
+        c.strokeStyle = 'rgba(2, 132, 199, 0.65)';
+        c.lineWidth = 6;
+        c.beginPath();
+        c.arc(W / 2, H / 2, 135, 0, Math.PI * 2);
+        c.stroke();
+
+        c.fillStyle = '#0284c7';
+        c.beginPath();
+        c.arc(W / 2, H / 2, 14, 0, Math.PI * 2);
+        c.fill();
+
+        // Four zone face-off circles
+        const faceoffSpots = [
+          [W * 0.22, H * 0.27],
+          [W * 0.22, H * 0.73],
+          [W * 0.78, H * 0.27],
+          [W * 0.78, H * 0.73]
+        ];
+        faceoffSpots.forEach(([fx, fy]) => {
+          c.strokeStyle = 'rgba(225, 29, 72, 0.45)';
+          c.lineWidth = 4;
+          c.beginPath();
+          c.arc(fx, fy, 85, 0, Math.PI * 2);
+          c.stroke();
+
+          c.fillStyle = 'rgba(225, 29, 72, 0.65)';
+          c.beginPath();
+          c.arc(fx, fy, 9, 0, Math.PI * 2);
+          c.fill();
+        });
+
+        // Goal creases (blue semi-circles in front of each net)
+        c.fillStyle = 'rgba(56, 189, 248, 0.26)';
+        c.strokeStyle = 'rgba(225, 29, 72, 0.7)';
+        c.lineWidth = 4;
+
+        // Left crease
+        c.beginPath();
+        c.arc(RINK_LEFT + 10, H / 2, 128, -Math.PI / 2, Math.PI / 2);
+        c.fill();
+        c.stroke();
+
+        // Right crease
+        c.beginPath();
+        c.arc(RINK_RIGHT - 10, H / 2, 128, Math.PI / 2, (Math.PI * 3) / 2);
+        c.fill();
+        c.stroke();
+
+        c.restore();
+
+        // Goal nets recessed into the left & right boards
+        // Left net (Player defends)
+        c.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        c.fillRect(RINK_LEFT - GOAL_DEPTH + 6, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT);
+        c.strokeStyle = '#38bdf8';
+        c.lineWidth = 5;
+        c.strokeRect(RINK_LEFT - GOAL_DEPTH + 6, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT);
+
+        // Right net (AI defends)
+        c.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        c.fillRect(RINK_RIGHT - 6, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT);
+        c.strokeStyle = '#fb7185';
+        c.lineWidth = 5;
+        c.strokeRect(RINK_RIGHT - 6, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT);
+
+        // Outer dasher boards with yellow kickplate trim
+        c.save();
+        drawRoundedRinkPath(c, RINK_LEFT, RINK_TOP, RINK_RIGHT - RINK_LEFT, RINK_BOTTOM - RINK_TOP, CORNER_RADIUS);
+        c.strokeStyle = '#facc15';
+        c.lineWidth = 14;
+        c.stroke();
+
+        c.strokeStyle = '#1e293b';
+        c.lineWidth = 6;
+        c.stroke();
+        c.restore();
+
+        // Clear board stroke over the two goal mouths so nets look recessed
+        c.fillStyle = '#0f172a';
+        c.fillRect(RINK_LEFT - 12, GOAL_TOP + 4, 22, GOAL_HEIGHT - 8);
+        c.fillRect(RINK_RIGHT - 10, GOAL_TOP + 4, 22, GOAL_HEIGHT - 8);
+
+        // Goal posts (metallic red circles)
+        const posts = [
+          [RINK_LEFT + 4, GOAL_TOP],
+          [RINK_LEFT + 4, GOAL_BOTTOM],
+          [RINK_RIGHT - 4, GOAL_TOP],
+          [RINK_RIGHT - 4, GOAL_BOTTOM]
+        ];
+        posts.forEach(([px, py]) => {
+          c.fillStyle = '#e11d48';
+          c.beginPath();
+          c.arc(px, py, 10, 0, Math.PI * 2);
+          c.fill();
+          c.strokeStyle = '#ffffff';
+          c.lineWidth = 2.5;
+          c.stroke();
+        });
+      }
+      function spawnSparks(x, y, color, count = 10, speedScale = 1) {
+        for (let i = 0; i < count; i++) {
+          if (particles.length > 90) particles.shift();
+          const angle = Math.random() * Math.PI * 2;
+          const speed = (120 + Math.random() * 340) * speedScale;
+          particles.push({
+            x,
+            y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 1,
+            decay: 2.6 + Math.random() * 1.8,
+            size: 2.5 + Math.random() * 3,
+            color
+          });
+        }
+      }
+
+      function clampStrikerToHalf(striker, isLeftHalf) {
+        const r = striker.radius;
+        const minX = isLeftHalf ? RINK_LEFT + r + 8 : W * 0.5 + r;
+        const maxX = isLeftHalf ? W * 0.5 - r : RINK_RIGHT - r - 8;
+        const minY = RINK_TOP + r + 8;
+        const maxY = RINK_BOTTOM - r - 8;
+
+        if (striker.x < minX) { striker.x = minX; striker.vx = 0; }
+        if (striker.x > maxX) { striker.x = maxX; striker.vx = 0; }
+        if (striker.y < minY) { striker.y = minY; striker.vy = 0; }
+        if (striker.y > maxY) { striker.y = maxY; striker.vy = 0; }
+
+        // Keep striker inside rounded corner arcs
+        const corners = isLeftHalf
+          ? [
+              [RINK_LEFT + CORNER_RADIUS, RINK_TOP + CORNER_RADIUS],
+              [RINK_LEFT + CORNER_RADIUS, RINK_BOTTOM - CORNER_RADIUS]
+            ]
+          : [
+              [RINK_RIGHT - CORNER_RADIUS, RINK_TOP + CORNER_RADIUS],
+              [RINK_RIGHT - CORNER_RADIUS, RINK_BOTTOM - CORNER_RADIUS]
+            ];
+
+        for (const [cx, cy] of corners) {
+          const inCornerX = isLeftHalf ? striker.x < cx : striker.x > cx;
+          const inCornerY = cy < H / 2 ? striker.y < cy : striker.y > cy;
+          if (inCornerX && inCornerY) {
+            const dx = striker.x - cx;
+            const dy = striker.y - cy;
+            const dist = Math.hypot(dx, dy);
+            const maxDist = CORNER_RADIUS - r - 6;
+            if (dist > maxDist && dist > 0) {
+              striker.x = cx + (dx / dist) * maxDist;
+              striker.y = cy + (dy / dist) * maxDist;
+            }
+          }
+        }
+      }
+      function resolveStrikerPuckCollision(striker, isPlayer) {
+        const dx = puck.x - striker.x;
+        const dy = puck.y - striker.y;
+        const dist = Math.hypot(dx, dy);
+        const minDist = striker.radius + puck.radius;
+
+        if (dist < minDist && dist > 0.0001) {
+          const nx = dx / dist;
+          const ny = dy / dist;
+
+          // Separate overlapping circles cleanly
+          const overlap = minDist - dist;
+          puck.x += nx * (overlap + 1);
+          puck.y += ny * (overlap + 1);
+
+          // Relative velocity along collision normal
+          const rvx = puck.vx - striker.vx;
+          const rvy = puck.vy - striker.vy;
+          const velAlongNormal = rvx * nx + rvy * ny;
+
+          if (velAlongNormal < 0) {
+            const restitution = 0.88;
+            const impulse = -(1 + restitution) * velAlongNormal;
+            puck.vx += impulse * nx;
+            puck.vy += impulse * ny;
+          }
+
+          // Transfer striker momentum + slapshot dash power
+          const dashBoost = striker.dashActiveTimer > 0 ? 1.45 : 1.05;
+          puck.vx += striker.vx * 0.52 * dashBoost;
+          puck.vy += striker.vy * 0.52 * dashBoost;
+
+          // Guarantee minimum crisp rebound speed on active hit
+          const newSpeed = Math.hypot(puck.vx, puck.vy);
+          const minHitSpeed = striker.dashActiveTimer > 0 ? 1180 : 540;
+          if (newSpeed < minHitSpeed) {
+            puck.vx = nx * minHitSpeed;
+            puck.vy = ny * minHitSpeed;
+          } else if (newSpeed > MAX_PUCK_SPEED) {
+            puck.vx = (puck.vx / newSpeed) * MAX_PUCK_SPEED;
+            puck.vy = (puck.vy / newSpeed) * MAX_PUCK_SPEED;
+          }
+
+          const finalSpeed = Math.hypot(puck.vx, puck.vy);
+          const intensity = finalSpeed / MAX_PUCK_SPEED;
+          sound.playPuckHit(intensity);
+          spawnSparks(
+            puck.x - nx * puck.radius,
+            puck.y - ny * puck.radius,
+            isPlayer ? '#38bdf8' : '#fb7185',
+            striker.dashActiveTimer > 0 ? 16 : 9,
+            0.7 + intensity * 0.7
+          );
+
+          if (striker.dashActiveTimer > 0) {
+            triggerScreenShake(0.12, 7);
+          }
+        }
+      }
+
+      function updatePuck(dt) {
+        // Store short motion trail for visual clarity at high speeds
+        puck.trail.push({ x: puck.x, y: puck.y });
+        if (puck.trail.length > 9) puck.trail.shift();
+
+        // Sub-step puck movement (2 sub-steps) to prevent tunneling on fast slapshots
+        const subSteps = 2;
+        const subDt = dt / subSteps;
+
+        for (let s = 0; s < subSteps; s++) {
+          puck.x += puck.vx * subDt;
+          puck.y += puck.vy * subDt;
+
+          // Check Goal Posts first (physical round posts!)
+          const posts = [
+            [RINK_LEFT + 4, GOAL_TOP],
+            [RINK_LEFT + 4, GOAL_BOTTOM],
+            [RINK_RIGHT - 4, GOAL_TOP],
+            [RINK_RIGHT - 4, GOAL_BOTTOM]
+          ];
+          for (const [px, py] of posts) {
+            const dx = puck.x - px;
+            const dy = puck.y - py;
+            const dist = Math.hypot(dx, dy);
+            const minPostDist = puck.radius + 9;
+            if (dist < minPostDist && dist > 0) {
+              const nx = dx / dist;
+              const ny = dy / dist;
+              puck.x = px + nx * (minPostDist + 1);
+              puck.y = py + ny * (minPostDist + 1);
+              const dot = puck.vx * nx + puck.vy * ny;
+              if (dot < 0) {
+                puck.vx = (puck.vx - 2 * dot * nx) * 0.88;
+                puck.vy = (puck.vy - 2 * dot * ny) * 0.88;
+                sound.playPostClang();
+                spawnSparks(px, py, '#fde047', 14, 0.9);
+                triggerScreenShake(0.1, 5);
+              }
+            }
+          }
+
+          // Check Goal Scoring (puck crosses goal line inside goal mouth)
+          const inGoalY = puck.y > GOAL_TOP + 8 && puck.y < GOAL_BOTTOM - 8;
+          if (inGoalY) {
+            if (puck.x - puck.radius < RINK_LEFT - 14) {
+              handleGoalScored(false); // AI scored
+              return;
+            }
+            if (puck.x + puck.radius > RINK_RIGHT + 14) {
+              handleGoalScored(true); // Player scored
+              return;
+            }
+          }
+
+          // Top and Bottom straight boards
+          if (puck.y - puck.radius < RINK_TOP + 6) {
+            puck.y = RINK_TOP + 6 + puck.radius;
+            if (puck.vy < 0) {
+              puck.vy = -puck.vy * 0.86;
+              sound.playBoardBounce(Math.abs(puck.vy) / MAX_PUCK_SPEED);
+              spawnSparks(puck.x, RINK_TOP + 6, '#e2f1f8', 5, 0.45);
+            }
+          } else if (puck.y + puck.radius > RINK_BOTTOM - 6) {
+            puck.y = RINK_BOTTOM - 6 - puck.radius;
+            if (puck.vy > 0) {
+              puck.vy = -puck.vy * 0.86;
+              sound.playBoardBounce(Math.abs(puck.vy) / MAX_PUCK_SPEED);
+              spawnSparks(puck.x, RINK_BOTTOM - 6, '#e2f1f8', 5, 0.45);
+            }
+          }
+
+          // Left and Right straight boards (outside goal opening)
+          if (!inGoalY) {
+            if (puck.x - puck.radius < RINK_LEFT + 6) {
+              puck.x = RINK_LEFT + 6 + puck.radius;
+              if (puck.vx < 0) {
+                puck.vx = -puck.vx * 0.86;
+                sound.playBoardBounce(Math.abs(puck.vx) / MAX_PUCK_SPEED);
+                spawnSparks(RINK_LEFT + 6, puck.y, '#e2f1f8', 5, 0.45);
+              }
+            } else if (puck.x + puck.radius > RINK_RIGHT - 6) {
+              puck.x = RINK_RIGHT - 6 - puck.radius;
+              if (puck.vx > 0) {
+                puck.vx = -puck.vx * 0.86;
+                sound.playBoardBounce(Math.abs(puck.vx) / MAX_PUCK_SPEED);
+                spawnSparks(RINK_RIGHT - 6, puck.y, '#e2f1f8', 5, 0.45);
+              }
+            }
+          }
+
+          // Rounded Rink Corners (smooth authentic ice hockey wrap-around bounces!)
+          const cornerCenters = [
+            [RINK_LEFT + CORNER_RADIUS, RINK_TOP + CORNER_RADIUS, true, true],
+            [RINK_RIGHT - CORNER_RADIUS, RINK_TOP + CORNER_RADIUS, false, true],
+            [RINK_LEFT + CORNER_RADIUS, RINK_BOTTOM - CORNER_RADIUS, true, false],
+            [RINK_RIGHT - CORNER_RADIUS, RINK_BOTTOM - CORNER_RADIUS, false, false]
+          ];
+
+          for (const [cx, cy, isLeft, isTop] of cornerCenters) {
+            const inX = isLeft ? puck.x < cx : puck.x > cx;
+            const inY = isTop ? puck.y < cy : puck.y > cy;
+            if (inX && inY) {
+              const dx = puck.x - cx;
+              const dy = puck.y - cy;
+              const dist = Math.hypot(dx, dy);
+              const maxAllowed = CORNER_RADIUS - puck.radius - 6;
+              if (dist > maxAllowed && dist > 0) {
+                const nx = dx / dist;
+                const ny = dy / dist;
+                puck.x = cx + nx * maxAllowed;
+                puck.y = cy + ny * maxAllowed;
+
+                const dot = puck.vx * nx + puck.vy * ny;
+                if (dot > 0) {
+                  puck.vx = (puck.vx - 2 * dot * nx) * 0.88;
+                  puck.vy = (puck.vy - 2 * dot * ny) * 0.88;
+                  sound.playBoardBounce(Math.hypot(puck.vx, puck.vy) / MAX_PUCK_SPEED);
+                }
+              }
+            }
+          }
+        }
+
+        // Apply realistic ice glide friction
+        const frictionFactor = Math.pow(ICE_FRICTION, dt * 60);
+        puck.vx *= frictionFactor;
+        puck.vy *= frictionFactor;
+
+        if (Math.hypot(puck.vx, puck.vy) < 6) {
+          puck.vx = 0;
+          puck.vy = 0;
+        }
+      }
+
+      function updateParticles(dt) {
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.vx *= 0.94;
+          p.vy *= 0.94;
+          p.life -= p.decay * dt;
+          if (p.life <= 0) {
+            particles.splice(i, 1);
+          }
+        }
+      }
+      function drawStriker(striker, isPlayer) {
+        ctx.save();
+
+        // Drop shadow on ice
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+        ctx.beginPath();
+        ctx.arc(striker.x + 5, striker.y + 7, striker.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Dash aura glow
+        if (striker.dashActiveTimer > 0) {
+          ctx.strokeStyle = isPlayer ? 'rgba(56, 189, 248, 0.7)' : 'rgba(251, 113, 133, 0.7)';
+          ctx.lineWidth = 8;
+          ctx.beginPath();
+          ctx.arc(striker.x, striker.y, striker.radius + 7, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Outer bumper ring
+        ctx.fillStyle = striker.color;
+        ctx.beginPath();
+        ctx.arc(striker.x, striker.y, striker.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Metallic highlight bevel
+        ctx.strokeStyle = striker.rimColor;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(striker.x, striker.y, striker.radius - 3, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Inner grip handle
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.arc(striker.x, striker.y, striker.radius * 0.44, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = striker.rimColor;
+        ctx.beginPath();
+        ctx.arc(striker.x - 3, striker.y - 3, striker.radius * 0.16, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      function drawPuck() {
+        // Motion trail
+        const speed = Math.hypot(puck.vx, puck.vy);
+        if (speed > 260 && puck.trail.length > 1) {
+          for (let i = 0; i < puck.trail.length; i++) {
+            const pt = puck.trail[i];
+            const ratio = (i + 1) / puck.trail.length;
+            ctx.fillStyle = `rgba(15, 23, 42, ${ratio * 0.22})`;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, puck.radius * (0.55 + ratio * 0.4), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // Puck ice shadow
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+        ctx.beginPath();
+        ctx.arc(puck.x + 4, puck.y + 5, puck.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Vulcanized rubber body
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Subtle rim bevel
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(puck.x, puck.y, puck.radius - 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      function drawParticles() {
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+          ctx.globalAlpha = Math.max(0, p.life);
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+  // ---- Bot AI (works for either side by mirroring the X axis) ---------------
+  function updateBot(s, dt) {
+    const profile = AI_PROFILES[opts.diff];
+    if (s.dashActiveTimer > 0) s.dashActiveTimer -= dt;
+    if (s.dashCooldown > 0) s.dashCooldown -= dt;
+
+    s.errorTimer -= dt;
+    if (s.errorTimer <= 0) {
+      s.errorTimer = 0.25 + Math.random() * 0.35;
+      s.errorOffsetY = (Math.random() * 2 - 1) * profile.reactionError;
+    }
+
+    // Mirror so every bot thinks it defends the right-hand goal.
+    const m = s.side;                       // +1 right, -1 left
+    const fx = (x) => (m > 0 ? x : W - x);
+    const px = fx(puck.x);
+    const pvx = puck.vx * m;
+    const sx = fx(s.x);
+
+    let desiredX = W * 0.82;
+    let desiredY = H * 0.5 + s.errorOffsetY;
+    const puckInZone = px > W * 0.48;
+    const puckApproaching = pvx > 80;
+
+    if (puckInZone) {
+      const behindPuckX = Math.min(RINK_RIGHT - s.radius - 28, px + 34);
+      if (px > sx - 10) {
+        desiredX = Math.min(RINK_RIGHT - s.radius - 20, px + 65);
+        desiredY = puck.y < H / 2 ? puck.y + 85 : puck.y - 85;
+      } else {
+        desiredX = behindPuckX;
+        desiredY = puck.y + s.errorOffsetY * 0.4;
+        const distToPuck = Math.hypot(px - sx, puck.y - s.y);
+        if (distToPuck < 155 && s.dashCooldown <= 0 && Math.random() < profile.dashChance) {
+          s.dashActiveTimer = 0.14;
+          s.dashCooldown = 1.1;
+        }
+      }
+    } else if (puckApproaching) {
+      const defX = W * (0.86 - profile.aggression * 0.14);
+      const t = Math.max(0, (defX - px) / Math.max(120, pvx));
+      let py = puck.y + puck.vy * t;
+      if (py < RINK_TOP + 50) py = RINK_TOP + 50 + (RINK_TOP + 50 - py);
+      if (py > RINK_BOTTOM - 50) py = RINK_BOTTOM - 50 - (py - (RINK_BOTTOM - 50));
+      desiredX = defX;
+      desiredY = Math.max(GOAL_TOP - 40, Math.min(GOAL_BOTTOM + 40, py + s.errorOffsetY));
+    } else {
+      desiredX = W * 0.84;
+      desiredY = H * 0.5 + (puck.y - H * 0.5) * 0.38 + s.errorOffsetY * 0.5;
+    }
+
+    desiredX = fx(desiredX); // back to real coordinates
+    const dx = desiredX - s.x;
+    const dy = desiredY - s.y;
+    const dist = Math.hypot(dx, dy);
+    const topSpeed = s.dashActiveTimer > 0 ? profile.maxSpeed * 1.65 : profile.maxSpeed;
+
+    if (dist > 4) {
+      const tvx = (dx / dist) * Math.min(topSpeed, dist * 7.5);
+      const tvy = (dy / dist) * Math.min(topSpeed, dist * 7.5);
+      const a = profile.accel * dt;
+      s.vx += Math.max(-a, Math.min(a, tvx - s.vx));
+      s.vy += Math.max(-a, Math.min(a, tvy - s.vy));
+    } else {
+      s.vx *= 0.8;
+      s.vy *= 0.8;
+    }
+
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    clampStrikerToHalf(s, s.side < 0);
+  }
+
+  // ---- Match flow -------------------------------------------------------------
+  function resetPositions(puckDirection) {
+    player.x = W * 0.24; player.y = H * 0.5; player.vx = 0; player.vy = 0; player.dashActiveTimer = 0;
+    ai.x = W * 0.76;     ai.y = H * 0.5;     ai.vx = 0;     ai.vy = 0;     ai.dashActiveTimer = 0;
+    puck.x = W * 0.5; puck.y = H * 0.5; puck.trail = [];
+    const angle = (Math.random() - 0.5) * 0.9;
+    puck.vx = Math.cos(angle) * 340 * puckDirection;
+    puck.vy = Math.sin(angle) * 340;
+    state.stallTimer = 0;
+  }
+
+  function setBanner(title, sub, seconds) {
+    state.banner = { title, sub, timer: seconds, total: seconds };
+  }
+
+  // Called by shared puck code. playerScored === true means the RIGHT goal was hit (blue scored).
+  function handleGoalScored(blueScored) {
+    triggerScreenShake(0.32, 13);
+    spawnSparks(puck.x, puck.y, blueScored ? '#38bdf8' : '#f43f5e', 34, 1.3);
+    if (blueScored) state.leftScore++; else state.rightScore++;
+
+    const winner = state.leftScore >= opts.goals ? 'BLUE' : state.rightScore >= opts.goals ? 'RED' : null;
+    if (winner) {
+      setBanner(winner + ' WINS!', state.leftScore + ' - ' + state.rightScore, 3.2);
+      state.goalPauseTimer = 3.4;
+      state.resetScoresAfterPause = true;
+      state.nextFaceoffDir = blueScored ? 1 : -1;
+    } else {
+      setBanner('GOAL!', blueScored ? 'BLUE SCORES' : 'RED SCORES', 1.3);
+      state.goalPauseTimer = 1.45;
+      state.nextFaceoffDir = blueScored ? 1 : -1;
+    }
+  }
+
+  // ---- HUD / banner (drawn on canvas, no DOM) ------------------------------------
+  const FONT = '"Chakra Petch","Segoe UI","Helvetica Neue",Arial,sans-serif';
+
+  function drawHUD() {
+    if (opts.hud) {
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '700 64px ' + FONT;
+      ctx.fillStyle = '#0284c7';
+      ctx.fillText(String(state.leftScore), W / 2 - 70, 78);
+      ctx.fillStyle = '#e11d48';
+      ctx.fillText(String(state.rightScore), W / 2 + 70, 78);
+      ctx.fillStyle = '#475569';
+      ctx.font = '700 40px ' + FONT;
+      ctx.fillText('-', W / 2, 76);
+      ctx.restore();
+    }
+    const b = state.banner;
+    if (b && b.timer > 0) {
+      const fade = Math.min(1, b.timer / 0.25, (b.total - b.timer) / 0.15 + 0.01);
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, fade);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+      ctx.fillRect(W / 2 - 330, H / 2 - 90, 660, 180);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'italic 700 96px ' + FONT;
+      ctx.fillText(b.title, W / 2, H / 2 - 16);
+      ctx.fillStyle = '#fcd34d';
+      ctx.font = '600 32px ' + FONT;
+      ctx.fillText(b.sub, W / 2, H / 2 + 52);
+      ctx.restore();
+    }
+  }
+
+  // ---- Rendering ----------------------------------------------------------------
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const cw = Math.max(1, Math.round(window.innerWidth * dpr));
+    const ch = Math.max(1, Math.round(window.innerHeight * dpr));
+    canvas.width = cw;
+    canvas.height = ch;
+    const scale = Math.min(cw / W, ch / H);
+    view = { scale, ox: (cw - W * scale) / 2, oy: (ch - H * scale) / 2 };
+
+    // Re-render the cached rink at roughly screen resolution (capped to keep memory sane).
+    const k = Math.min(2.5, Math.max(1, scale));
+    rinkBgCanvas.width = Math.round(W * k);
+    rinkBgCanvas.height = Math.round(H * k);
+    bgCtx.setTransform(k, 0, 0, k, 0, 0);
+    renderStaticRink();
+  }
+
+  function render() {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#090e17';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.setTransform(view.scale, 0, 0, view.scale, view.ox, view.oy);
+    if (state.shakeTime > 0) {
+      ctx.translate((Math.random() * 2 - 1) * state.shakeIntensity, (Math.random() * 2 - 1) * state.shakeIntensity);
+    }
+    ctx.drawImage(rinkBgCanvas, 0, 0, W, H);
+    drawPuck();
+    drawStriker(player, true);
+    drawStriker(ai, false);
+    drawParticles();
+    ctx.setTransform(view.scale, 0, 0, view.scale, view.ox, view.oy);
+    drawHUD();
+  }
+
+  // ---- Main loop -------------------------------------------------------------------
+  let last = 0;
+  const frameMs = 1000 / opts.fps;
+
+  function tick(ts) {
+    requestAnimationFrame(tick);
+    if (document.hidden) { last = 0; return; }
+    if (!last) last = ts;
+    const elapsed = ts - last;
+    if (elapsed < frameMs - 1) return;      // frame cap
+    last = ts;
+    const dt = Math.min(0.05, elapsed / 1000);
+
+    if (state.shakeTime > 0) state.shakeTime = Math.max(0, state.shakeTime - dt);
+    if (state.banner) { state.banner.timer -= dt; if (state.banner.timer <= 0) state.banner = null; }
+
+    if (state.goalPauseTimer > 0) {
+      state.goalPauseTimer -= dt;
+      updateParticles(dt);
+      if (state.goalPauseTimer <= 0) {
+        if (state.resetScoresAfterPause) {
+          state.leftScore = 0; state.rightScore = 0; state.resetScoresAfterPause = false;
+        }
+        resetPositions(state.nextFaceoffDir);
+      }
+    } else {
+      updateBot(player, dt);
+      updateBot(ai, dt);
+      updatePuck(dt);
+      resolveStrikerPuckCollision(player, true);
+      resolveStrikerPuckCollision(ai, false);
+      updateParticles(dt);
+
+      // Anti-stall: if the puck is dead or pinned for a while, re-drop it.
+      if (Math.hypot(puck.vx, puck.vy) < 25) state.stallTimer += dt; else state.stallTimer = 0;
+      if (state.stallTimer > 1.5) resetPositions(Math.random() < 0.5 ? 1 : -1);
+    }
+    render();
+  }
+
+  // Runtime property hooks (Lively Wallpaper / Wallpaper Engine)
+  window.livelyPropertyListener = function (name, val) {
+    if (name === 'hud') opts.hud = !!val;
+    else if (name === 'diff' && AI_PROFILES[val]) opts.diff = val;
+    else if (name === 'goals') opts.goals = Math.max(1, parseInt(val, 10) || 5);
+  };
+  window.wallpaperPropertyListener = {
+    applyUserProperties: function (p) {
+      if (p.hud) opts.hud = !!p.hud.value;
+      if (p.diff && AI_PROFILES[p.diff.value]) opts.diff = p.diff.value;
+      if (p.goals) opts.goals = Math.max(1, parseInt(p.goals.value, 10) || 5);
+    }
+  };
+
+  window.addEventListener('resize', resize);
+  resize();
+  resetPositions(Math.random() < 0.5 ? 1 : -1);
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

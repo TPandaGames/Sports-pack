@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "drifting-lights",
+  "name": "Drifting Lights",
+  "version": "1.0",
+  "author": "BE AI Research Labs",
+  "description": "Soft lights drifting over a dark sky. The example pack from docs/WALLPAPERS.md.",
+  "entry": "index.html",
+  "preview": "preview.png"
+}

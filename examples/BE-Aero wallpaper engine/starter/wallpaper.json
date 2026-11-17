@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "starter",
+  "name": "Starter",
+  "version": "1.0",
+  "author": "BE AI Research Labs",
+  "description": "The smallest complete wallpaper pack: copy it to start your own (docs/WALLPAPERS.md).",
+  "entry": "index.html",
+  "preview": "preview.png"
+}
